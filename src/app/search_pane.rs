@@ -981,3 +981,125 @@ mod tests {
         assert_eq!(click_target(&state, rect, 105, HEADER_ROWS + 1), Some(SearchPaneClick::Hit(0)));
     }
 }
+
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+    use crate::{app::input::app_for_mouse_test, input::TerminalKey, workspace::Workspace};
+    use crossterm::event::KeyModifiers;
+
+    fn app_with_scrollback(bytes: &[u8]) -> (App, PaneId) {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(0, 0, 40, 5));
+        let info = pane_infos[0].clone();
+        ws.tabs[0].runtimes.insert(
+            pane_id,
+            crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                16 * 1024,
+                bytes,
+            ),
+        );
+        // The agent panel (and therefore search) only lists panes running a known agent.
+        let terminal_id = ws.tabs[0].panes[&pane_id].attached_terminal_id.clone();
+        let mut terminal = crate::terminal::TerminalState::new(terminal_id.clone(), "/tmp".into());
+        terminal.agent_name = Some("pi".into());
+        app.state.terminals.insert(terminal_id, terminal);
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+        app.state.view.search_pane_rect = Rect::new(40, 0, 30, 20);
+        (app, pane_id)
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            app.handle_search_pane_terminal_key(&TerminalKey::new(
+                KeyCode::Char(ch),
+                KeyModifiers::empty(),
+            ));
+        }
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_search_pane_terminal_key(&TerminalKey::new(code, KeyModifiers::empty()));
+    }
+
+    #[tokio::test]
+    async fn toggle_opens_focuses_and_hides_keeping_query() {
+        let (mut app, _) = app_with_scrollback(b"alpha\r\n");
+        app.state.toggle_search_pane();
+        assert!(app.state.search_pane.visible);
+        assert_eq!(app.state.mode, Mode::SearchPane);
+        type_text(&mut app, "alp");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.state.search_pane.visible, "esc keeps the pane open");
+        app.state.toggle_search_pane();
+        assert!(!app.state.search_pane.visible);
+        assert_eq!(app.state.search_pane.query, "alp", "query survives hiding");
+    }
+
+    #[tokio::test]
+    async fn keyword_search_groups_recent_hits_and_enter_jumps() {
+        let mut bytes = Vec::new();
+        for i in 0..40 {
+            bytes.extend_from_slice(format!("line {i} {}\r\n", if i % 10 == 0 { "needle" } else { "hay" }).as_bytes());
+        }
+        let (mut app, pane_id) = app_with_scrollback(&bytes);
+        app.state.toggle_search_pane();
+        type_text(&mut app, "needle");
+        press(&mut app, KeyCode::Enter);
+
+        let sp = &app.state.search_pane;
+        assert_eq!(sp.groups.len(), 1);
+        assert_eq!(sp.groups[0].pane_id, pane_id);
+        assert_eq!(sp.groups[0].hits.len(), MAX_HITS_PER_PANE, "capped at 3 of the 4 matches");
+        let rows: Vec<u32> = sp.groups[0].hits.iter().map(|h| h.text_match.start.row).collect();
+        assert!(rows.windows(2).all(|w| w[0] > w[1]), "newest first: {rows:?}");
+        assert!(sp.groups[0].hits[0].snippet.contains("line 30 needle"));
+        assert!(sp.results_fresh());
+
+        // Down selects the newest hit; Enter jumps: pane focused, scrolled so the row is visible.
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.state.search_pane.selected, Some(0));
+        let target_row = rows[2] as usize; // oldest of the three: needs a real scroll
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.state.mode, Mode::Terminal);
+        let metrics = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .and_then(crate::terminal::TerminalRuntime::scroll_metrics)
+            .expect("metrics");
+        let top = metrics.max_offset_from_bottom - metrics.offset_from_bottom;
+        assert!(
+            top <= target_row && target_row < top + metrics.viewport_rows,
+            "row {target_row} not in viewport starting {top} (rows {})",
+            metrics.viewport_rows
+        );
+    }
+
+    #[tokio::test]
+    async fn editing_query_invalidates_results_and_enter_searches_again() {
+        let (mut app, _) = app_with_scrollback(b"foo\r\nbar\r\n");
+        app.state.toggle_search_pane();
+        type_text(&mut app, "foo");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.state.search_pane.hit_count(), 1);
+        press(&mut app, KeyCode::Backspace);
+        assert!(!app.state.search_pane.results_fresh());
+        assert_eq!(app.state.search_pane.selected, None);
+        type_text(&mut app, "x");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.state.search_pane.hit_count(), 0);
+        assert_eq!(app.state.search_pane.status.as_deref(), Some("no matches"));
+    }
+}
