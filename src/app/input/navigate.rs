@@ -286,6 +286,9 @@ impl App {
                     leave_navigate_mode(&mut self.state);
                 }
             }
+            NavigateAction::ToggleWorkspaceSelection => {
+                self.state.toggle_current_workspace_selection();
+            }
             NavigateAction::NewTab => {
                 if self.state.active.is_some() {
                     if self.state.prompt_new_tab_name {
@@ -1395,6 +1398,7 @@ pub(crate) enum NavigateAction {
     NextWorkspace,
     PreviousAgent,
     NextAgent,
+    ToggleWorkspaceSelection,
     NewTab,
     RenameTab,
     PreviousTab,
@@ -1445,6 +1449,7 @@ fn copy_mode_survives_prefix_action(action: NavigateAction) -> bool {
             | NavigateAction::NextWorkspace
             | NavigateAction::PreviousAgent
             | NavigateAction::NextAgent
+            | NavigateAction::ToggleWorkspaceSelection
             | NavigateAction::PreviousTab
             | NavigateAction::NextTab
             | NavigateAction::FocusPaneLeft
@@ -1543,6 +1548,10 @@ fn non_indexed_action_for_key(
         (&kb.next_workspace, NavigateAction::NextWorkspace),
         (&kb.previous_agent, NavigateAction::PreviousAgent),
         (&kb.next_agent, NavigateAction::NextAgent),
+        (
+            &kb.toggle_workspace_selection,
+            NavigateAction::ToggleWorkspaceSelection,
+        ),
         (&kb.new_tab, NavigateAction::NewTab),
         (&kb.rename_tab, NavigateAction::RenameTab),
         (&kb.previous_tab, NavigateAction::PreviousTab),
@@ -1731,6 +1740,9 @@ pub(super) fn execute_navigate_action_in_context(
         NavigateAction::NextAgent => {
             state.next_agent();
             leave_navigate_mode(state);
+        }
+        NavigateAction::ToggleWorkspaceSelection => {
+            state.toggle_current_workspace_selection();
         }
         NavigateAction::NewTab => {
             if state.active.is_some() {

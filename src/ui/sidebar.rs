@@ -131,6 +131,7 @@ fn agent_panel_entries_with_runtimes(
     terminal_runtimes: Option<&TerminalRuntimeRegistry>,
 ) -> Vec<AgentPanelEntry> {
     let mut entries = collect_agent_panel_entries_with_runtimes(app, terminal_runtimes);
+    entries.retain(|entry| app.workspace_selected(entry.ws_idx));
     crate::app::agent_view::apply_agent_view(app, &mut entries);
     for (position, entry) in entries.iter_mut().enumerate() {
         entry.index = position + 1;
@@ -187,6 +188,23 @@ fn collect_agent_panel_entries_with_runtimes(
                 })
         })
         .collect()
+}
+
+/// Sidebar selection indicator for a workspace: filled circle when its agents are shown
+/// in the agent panel, hollow when hidden. Always drawn in the workspace's own colour.
+pub(crate) fn workspace_selection_icon(app: &AppState, ws_idx: usize) -> (&'static str, Style) {
+    let icon = if app.workspace_selected(ws_idx) {
+        "●"
+    } else {
+        "○"
+    };
+    (icon, Style::default().fg(app.workspace_color(ws_idx)))
+}
+
+/// Agent-row state icon: state glyph, coloured to match the agent's workspace circle.
+fn agent_state_icon(app: &AppState, entry_ws_idx: usize, state: AgentState, seen: bool, p: &Palette) -> (&'static str, Style) {
+    let (icon, _) = state_icon(state, seen, app.status_indicators, p);
+    (icon, Style::default().fg(app.workspace_color(entry_ws_idx)))
 }
 
 pub(super) fn agent_panel_status_key(state: AgentState, seen: bool) -> &'static str {
@@ -797,8 +815,8 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         if y >= ws_area.y + ws_area.height {
             break;
         }
-        let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
-        let (icon, icon_style) = state_icon(agg_state, agg_seen, app.status_indicators, p);
+        let _ = ws;
+        let (icon, icon_style) = workspace_selection_icon(app, visible_idx);
         let is_selected = visible_idx == app.selected && is_navigating;
         let is_active = Some(visible_idx) == app.active;
         let selection_bg = workspace_selection_background(p, is_active);
@@ -866,7 +884,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
                 Style::default().fg(p.overlay0)
             };
             let (icon, icon_style) =
-                state_icon(detail.state, detail.seen, app.status_indicators, p);
+                agent_state_icon(app, detail.ws_idx, detail.state, detail.seen, p);
 
             if is_active {
                 let buf = frame.buffer_mut();
@@ -1394,7 +1412,7 @@ fn render_workspace_list(
             .filter(|(_, collapsed)| *collapsed)
             .map(|(key, _)| space_aggregate_state(app, key))
             .unwrap_or((agg_state, agg_seen));
-        let state_icon = state_icon(display_state, display_seen, app.status_indicators, p);
+        let state_icon = workspace_selection_icon(app, i);
         let state_text_style = Style::default()
             .fg(state_label_color(display_state, display_seen, p))
             .add_modifier(Modifier::DIM);
@@ -1607,7 +1625,7 @@ fn render_agent_detail(
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
         };
         let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
-        let state_icon = state_icon(detail.state, detail.seen, app.status_indicators, p);
+        let state_icon = agent_state_icon(app, detail.ws_idx, detail.state, detail.seen, p);
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
             let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];
@@ -2552,13 +2570,14 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             buffer[(workspace_area.x + 1, workspace_area.y)].symbol(),
             " "
         );
+        // Workspace circles are selection indicators: filled while the space's agents are shown.
         assert_eq!(
             buffer[(workspace_area.x + 2, workspace_area.y)].symbol(),
-            "·"
+            "●"
         );
         assert_eq!(buffer[(workspace_area.x, tenth_row)].symbol(), "1");
         assert_eq!(buffer[(workspace_area.x + 1, tenth_row)].symbol(), "0");
-        assert_eq!(buffer[(workspace_area.x + 2, tenth_row)].symbol(), "·");
+        assert_eq!(buffer[(workspace_area.x + 2, tenth_row)].symbol(), "●");
     }
 
     #[test]
@@ -2641,14 +2660,17 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(buffer[(detail_area.x, detail_area.y + 1)].symbol(), "2");
         assert_eq!(buffer[(detail_area.x, detail_area.y + 2)].symbol(), "3");
         assert_eq!(buffer[(detail_area.x + 2, detail_area.y)].symbol(), "×");
+        // Agent icons keep the state glyph but take the colour of their workspace's circle.
+        let entries = agent_panel_entries(&app);
+        assert_eq!(entries[0].ws_idx, 1);
         assert_eq!(
             buffer[(detail_area.x + 2, detail_area.y)].style().fg,
-            Some(app.palette.red)
+            Some(app.workspace_color(entries[0].ws_idx))
         );
         assert_eq!(buffer[(detail_area.x + 2, detail_area.y + 1)].symbol(), "✓");
         assert_eq!(
             buffer[(detail_area.x + 2, detail_area.y + 1)].style().fg,
-            Some(app.palette.teal)
+            Some(app.workspace_color(entries[1].ws_idx))
         );
     }
 

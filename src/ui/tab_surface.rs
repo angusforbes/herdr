@@ -282,6 +282,8 @@ mod tests {
 
         let mut app = AppState::test_new();
         app.workspaces = vec![workspace];
+        // Pin the id: the sidebar circle colour derives from it and the digest below must be stable.
+        app.workspaces[0].id = "w1".into();
         app.active = Some(0);
         app.selected = 0;
         app.mode = Mode::Terminal;
@@ -304,7 +306,7 @@ mod tests {
         assert_eq!(frame.hyperlinks, vec![uri.to_owned()]);
         assert_eq!(
             frame_digest(&frame),
-            "a7c21fa42305a41231c7ae254f264f6ef923f46301d8fc4cd35ab6dfdd651b6b"
+            "aedb4c09b5e568f4c5ef5fe1a8de42135709056ec2b6a0be8a93ef28e5f12528"
         );
     }
 

@@ -6144,3 +6144,80 @@ mod tests {
         assert_eq!(state.workspaces[0].display_name(), "notes");
     }
 }
+
+#[cfg(test)]
+mod workspace_selection_tests {
+    use crate::app::state::Mode;
+    use crate::app::AppState;
+    use crate::workspace::Workspace;
+
+    fn state_with_two_workspaces() -> AppState {
+        let mut state = AppState::test_new();
+        state.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        state.workspaces[0].id = "w1".into();
+        state.workspaces[1].id = "w2".into();
+        state.ensure_test_terminals();
+        for ws_idx in 0..2 {
+            let pane_id = state.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = state.workspaces[ws_idx].tabs[0]
+                .panes
+                .get(&pane_id)
+                .unwrap()
+                .attached_terminal_id
+                .clone();
+            if let Some(terminal) = state.terminals.get_mut(&terminal_id) {
+                terminal.set_detected_state(
+                    Some(crate::detect::Agent::Pi),
+                    crate::detect::AgentState::Idle,
+                );
+            }
+        }
+        state.active = Some(0);
+        state.selected = 0;
+        state.mode = Mode::Terminal;
+        state
+    }
+
+    #[test]
+    fn workspaces_start_selected_and_toggle_hides_their_agents() {
+        let mut state = state_with_two_workspaces();
+        assert!(state.workspace_selected(0));
+        assert!(state.workspace_selected(1));
+        assert_eq!(
+            crate::ui::all_agent_panel_entries(&state).len(),
+            crate::ui::agent_panel_entries(&state).len()
+        );
+
+        state.active = Some(1);
+        state.toggle_current_workspace_selection();
+        assert!(state.workspace_selected(0));
+        assert!(!state.workspace_selected(1));
+        assert!(crate::ui::agent_panel_entries(&state)
+            .iter()
+            .all(|entry| entry.ws_idx != 1));
+        // The unfiltered list still includes the hidden workspace.
+        assert!(crate::ui::all_agent_panel_entries(&state)
+            .iter()
+            .any(|entry| entry.ws_idx == 1));
+
+        state.toggle_current_workspace_selection();
+        assert!(state.workspace_selected(1));
+    }
+
+    #[test]
+    fn navigate_mode_toggles_the_highlighted_workspace() {
+        let mut state = state_with_two_workspaces();
+        state.selected = 1;
+        state.mode = Mode::Navigate;
+        state.toggle_current_workspace_selection();
+        assert!(state.workspace_selected(0));
+        assert!(!state.workspace_selected(1));
+    }
+
+    #[test]
+    fn workspace_colors_are_stable_per_id() {
+        let state = state_with_two_workspaces();
+        assert_ne!(state.workspace_color(0), state.workspace_color(1));
+        assert_eq!(state.workspace_color(0), state.workspace_color(0));
+    }
+}

@@ -1418,6 +1418,9 @@ pub struct AppState {
     pub worktree_remove: Option<WorktreeRemoveState>,
     pub worktree_directory: std::path::PathBuf,
     pub collapsed_space_keys: std::collections::HashSet<String>,
+    /// Workspaces whose agents are hidden from the agent panel (sidebar selection circles).
+    /// Keyed by stable workspace id. Empty = every workspace selected.
+    pub deselected_workspace_ids: std::collections::HashSet<String>,
     pub request_complete_onboarding: bool,
     pub name_input: String,
     pub name_input_replace_on_type: bool,
@@ -1727,6 +1730,64 @@ impl AppState {
         self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id)
     }
 
+    /// Whether a workspace's agents are shown in the agent panel.
+    pub fn workspace_selected(&self, ws_idx: usize) -> bool {
+        self.workspaces
+            .get(ws_idx)
+            .is_none_or(|ws| !self.deselected_workspace_ids.contains(&ws.id))
+    }
+
+    /// Toggle whether a workspace's agents appear in the agent panel.
+    pub fn toggle_workspace_selection(&mut self, ws_idx: usize) {
+        let Some(ws) = self.workspaces.get(ws_idx) else {
+            return;
+        };
+        if !self.deselected_workspace_ids.remove(&ws.id) {
+            self.deselected_workspace_ids.insert(ws.id.clone());
+        }
+        self.agent_panel_scroll = 0;
+    }
+
+    /// Toggle selection of the active workspace (or the sidebar-highlighted one in navigate mode).
+    pub fn toggle_current_workspace_selection(&mut self) {
+        let target = if self.mode == Mode::Navigate {
+            Some(self.selected)
+        } else {
+            self.active
+        };
+        if let Some(ws_idx) = target {
+            self.toggle_workspace_selection(ws_idx);
+        }
+    }
+
+    /// Stable accent colour for a workspace, derived from its id so it survives reordering.
+    pub fn workspace_color(&self, ws_idx: usize) -> ratatui::style::Color {
+        const PALETTE: [ratatui::style::Color; 8] = [
+            ratatui::style::Color::Rgb(0x7a, 0xa2, 0xf7), // blue
+            ratatui::style::Color::Rgb(0x9e, 0xce, 0x6a), // green
+            ratatui::style::Color::Rgb(0xe0, 0xaf, 0x68), // amber
+            ratatui::style::Color::Rgb(0xf7, 0x76, 0x8e), // rose
+            ratatui::style::Color::Rgb(0xbb, 0x9a, 0xf7), // violet
+            ratatui::style::Color::Rgb(0x7d, 0xcf, 0xff), // sky
+            ratatui::style::Color::Rgb(0xff, 0x9e, 0x64), // orange
+            ratatui::style::Color::Rgb(0x73, 0xda, 0xca), // teal
+        ];
+        let seed = self
+            .workspaces
+            .get(ws_idx)
+            .map(|ws| {
+                // Ids are `w<base32 counter>`; decode so consecutive workspaces get
+                // consecutive palette entries. Fall back to a byte sum for odd ids.
+                ws.id
+                    .strip_prefix('w')
+                    .and_then(crate::workspace::decode_public_number)
+                    .map(|n| n.saturating_sub(1))
+                    .unwrap_or_else(|| ws.id.bytes().map(usize::from).sum())
+            })
+            .unwrap_or(ws_idx);
+        PALETTE[seed % PALETTE.len()]
+    }
+
     pub fn is_active_pane(
         &self,
         ws_idx: usize,
@@ -1803,6 +1864,7 @@ impl AppState {
             worktree_remove: None,
             worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             collapsed_space_keys: std::collections::HashSet::new(),
+            deselected_workspace_ids: std::collections::HashSet::new(),
             request_complete_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,

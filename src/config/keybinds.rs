@@ -324,6 +324,7 @@ pub struct Keybinds {
     pub next_workspace: ActionKeybinds,
     pub previous_agent: ActionKeybinds,
     pub next_agent: ActionKeybinds,
+    pub toggle_workspace_selection: ActionKeybinds,
     pub focus_agent: Vec<IndexedKeybind>,
     pub new_tab: ActionKeybinds,
     pub rename_tab: ActionKeybinds,
@@ -493,6 +494,7 @@ impl Config {
             next_workspace: empty_action!(),
             previous_agent: empty_action!(),
             next_agent: empty_action!(),
+            toggle_workspace_selection: empty_action!(),
             focus_agent: Vec::new(),
             new_tab: empty_action!(),
             rename_tab: empty_action!(),
@@ -626,6 +628,11 @@ impl Config {
             apply_action!(keybinds.next_workspace, next_workspace, source);
             apply_action!(keybinds.previous_agent, previous_agent, source);
             apply_action!(keybinds.next_agent, next_agent, source);
+            apply_action!(
+                keybinds.toggle_workspace_selection,
+                toggle_workspace_selection,
+                source
+            );
             apply_indexed!(
                 keybinds.focus_agent,
                 focus_agent,
