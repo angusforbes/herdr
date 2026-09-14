@@ -55,7 +55,7 @@ pub(super) fn agent_rows(
                             Some(ResolvedTokenKind::StateText(state_text.to_string()))
                         }
                         AgentSidebarToken::Index => {
-                            Some(ResolvedTokenKind::Index(format!("{}.", entry.index)))
+                            Some(ResolvedTokenKind::Index(entry.index.to_string()))
                         }
                         AgentSidebarToken::Workspace => {
                             Some(ResolvedTokenKind::Workspace(entry.primary_label.clone()))
@@ -176,10 +176,8 @@ pub(super) fn space_rows(
 }
 
 pub(super) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
-    if matches!(
-        previous.kind,
-        ResolvedTokenKind::StateIcon | ResolvedTokenKind::Index(_)
-    ) || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
+    if matches!(previous.kind, ResolvedTokenKind::StateIcon)
+        || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
     {
         " "
     } else {
