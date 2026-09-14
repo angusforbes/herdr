@@ -8,6 +8,75 @@ use crate::config::{
 pub(super) struct ResolvedToken {
     pub kind: ResolvedTokenKind,
     pub style: SidebarTokenStyle,
+    /// Per-segment colours for custom tokens using inline `{#rrggbb}` markup.
+    /// `None` = render the text with the single token style.
+    pub rich: Option<Vec<RichSegment>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RichSegment {
+    pub text: String,
+    pub fg: Option<crate::config::SidebarTokenColor>,
+}
+
+/// Parse `{#rrggbb}text{#rgb}more{}plain` into plain text + coloured segments.
+/// `{}` resets to the token's own colour. Braces that don't form a valid tag are literal.
+pub(super) fn parse_rich_markup(value: &str) -> (String, Option<Vec<RichSegment>>) {
+    let mut plain = String::new();
+    let mut segments: Vec<RichSegment> = Vec::new();
+    let mut current = RichSegment {
+        text: String::new(),
+        fg: None,
+    };
+    let mut saw_tag = false;
+    let mut rest = value;
+    while let Some(open) = rest.find('{') {
+        let (before, after) = rest.split_at(open);
+        current.text.push_str(before);
+        plain.push_str(before);
+        let Some(close) = after.find('}') else {
+            rest = after;
+            break;
+        };
+        let tag = &after[1..close];
+        let parsed = if tag.is_empty() {
+            Some(None)
+        } else {
+            crate::config::SidebarTokenColor::parse_hex(tag).map(Some)
+        };
+        match parsed {
+            Some(fg) => {
+                saw_tag = true;
+                if !current.text.is_empty() {
+                    segments.push(std::mem::replace(
+                        &mut current,
+                        RichSegment {
+                            text: String::new(),
+                            fg,
+                        },
+                    ));
+                } else {
+                    current.fg = fg;
+                }
+                rest = &after[close + 1..];
+            }
+            None => {
+                current.text.push('{');
+                plain.push('{');
+                rest = &after[1..];
+            }
+        }
+    }
+    current.text.push_str(rest);
+    plain.push_str(rest);
+    if !current.text.is_empty() {
+        segments.push(current);
+    }
+    if saw_tag {
+        (plain, Some(segments))
+    } else {
+        (plain, None)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,7 +96,11 @@ pub(super) enum ResolvedTokenKind {
 
 impl ResolvedToken {
     fn new(kind: ResolvedTokenKind, style: SidebarTokenStyle) -> Self {
-        Self { kind, style }
+        Self {
+            kind,
+            style,
+            rich: None,
+        }
     }
 
     #[cfg(test)]
@@ -83,7 +156,10 @@ pub(super) fn agent_rows(
                             // tokens: `<name>_fg=#rrggbb`, `<name>_bold=true`, `<name>_italic=true`.
                             // Explicit config styling still wins.
                             let style = custom_token_style(&entry.tokens, name, style);
-                            return Some(ResolvedToken::new(ResolvedTokenKind::Custom(value), style));
+                            let (plain, rich) = parse_rich_markup(&value);
+                            let mut token = ResolvedToken::new(ResolvedTokenKind::Custom(plain), style);
+                            token.rich = rich;
+                            return Some(token);
                         }
                         AgentSidebarToken::Styled { .. } => None,
                     }?;
@@ -400,5 +476,37 @@ mod custom_style_tests {
 
         tokens.insert("name_fg".to_string(), "orange".to_string());
         assert_eq!(custom_token_style(&tokens, "name", SidebarTokenStyle::default()).fg, None);
+    }
+}
+
+#[cfg(test)]
+mod rich_markup_tests {
+    use super::*;
+
+    fn rgb(c: &crate::config::SidebarTokenColor) -> ratatui::style::Color {
+        c.ratatui()
+    }
+
+    #[test]
+    fn markup_splits_into_coloured_segments_and_plain_text() {
+        let (plain, rich) = parse_rich_markup("{#ff0000}Sp{#00ff00}li{}ce");
+        assert_eq!(plain, "Splice");
+        let rich = rich.unwrap();
+        assert_eq!(rich.len(), 3);
+        assert_eq!(rich[0].text, "Sp");
+        assert_eq!(rich[0].fg.as_ref().map(rgb), Some(ratatui::style::Color::Rgb(255, 0, 0)));
+        assert_eq!(rich[1].text, "li");
+        assert_eq!(rich[2].text, "ce");
+        assert_eq!(rich[2].fg, None);
+    }
+
+    #[test]
+    fn markup_without_tags_or_with_bad_tags_is_literal() {
+        assert_eq!(parse_rich_markup("Splice"), ("Splice".into(), None));
+        assert_eq!(parse_rich_markup("a {b} c"), ("a {b} c".into(), None));
+        assert_eq!(parse_rich_markup("x {#zz} y"), ("x {#zz} y".into(), None));
+        let (plain, rich) = parse_rich_markup("{#abc}tail{");
+        assert_eq!(plain, "tail{");
+        assert!(rich.is_some());
     }
 }

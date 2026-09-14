@@ -1182,6 +1182,34 @@ fn resolved_token_spans(
                     ));
                 }
             }
+            ResolvedTokenKind::Custom(text) if token.rich.is_some() => {
+                let base = apply_token_style(custom_style, token.style);
+                let shown = truncate_end(text, budgets[index]);
+                // Walk the coloured segments, emitting only what survived truncation.
+                let mut remaining = shown.as_str();
+                for segment in token.rich.as_deref().unwrap_or_default() {
+                    if remaining.is_empty() {
+                        break;
+                    }
+                    let take = segment
+                        .text
+                        .char_indices()
+                        .map(|(i, c)| i + c.len_utf8())
+                        .take_while(|&end| remaining.len() >= end && remaining.is_char_boundary(end) && remaining[..end] == segment.text[..end])
+                        .last()
+                        .unwrap_or(0);
+                    if take == 0 {
+                        // truncation ellipsis or mismatch: flush the rest with the base style
+                        break;
+                    }
+                    let style = segment.fg.map_or(base, |fg| base.fg(fg.ratatui()));
+                    spans.push(Span::styled(remaining[..take].to_string(), style));
+                    remaining = &remaining[take..];
+                }
+                if !remaining.is_empty() {
+                    spans.push(Span::styled(remaining.to_string(), base));
+                }
+            }
             ResolvedTokenKind::TerminalTitle(text) | ResolvedTokenKind::Custom(text) => {
                 spans.push(Span::styled(
                     truncate_end(text, budgets[index]),
@@ -1984,6 +2012,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                     behind: 1,
                 },
                 style: config.ui.sidebar.spaces.rows[0][0].parts().1,
+                rich: None,
             }],
             ("", Style::default()),
             Style::default(),
