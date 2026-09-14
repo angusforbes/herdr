@@ -14,6 +14,7 @@ pub(super) struct ResolvedToken {
 pub(super) enum ResolvedTokenKind {
     StateIcon,
     StateText(String),
+    Index(String),
     Workspace(String),
     Tab(String),
     Pane(String),
@@ -52,6 +53,9 @@ pub(super) fn agent_rows(
                         AgentSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
                         AgentSidebarToken::StateText => {
                             Some(ResolvedTokenKind::StateText(state_text.to_string()))
+                        }
+                        AgentSidebarToken::Index => {
+                            Some(ResolvedTokenKind::Index(format!("{}.", entry.index)))
                         }
                         AgentSidebarToken::Workspace => {
                             Some(ResolvedTokenKind::Workspace(entry.primary_label.clone()))
@@ -142,8 +146,10 @@ pub(super) fn space_rows(
 }
 
 pub(super) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
-    if matches!(previous.kind, ResolvedTokenKind::StateIcon)
-        || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
+    if matches!(
+        previous.kind,
+        ResolvedTokenKind::StateIcon | ResolvedTokenKind::Index(_)
+    ) || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
     {
         " "
     } else {
@@ -159,6 +165,7 @@ mod tests {
 
     fn entry() -> AgentPanelEntry {
         AgentPanelEntry {
+            index: 1,
             ws_idx: 0,
             tab_idx: 0,
             pane_id: crate::layout::PaneId::from_raw(1),

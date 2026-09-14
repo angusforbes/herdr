@@ -21,6 +21,8 @@ const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
 const AGENT_PANEL_HEADER_ROWS: u16 = 3;
 
 pub(crate) struct AgentPanelEntry {
+    /// 1-based position in the agent panel, after view filtering/ordering.
+    pub index: usize,
     pub ws_idx: usize,
     pub tab_idx: usize,
     pub pane_id: crate::layout::PaneId,
@@ -130,6 +132,9 @@ fn agent_panel_entries_with_runtimes(
 ) -> Vec<AgentPanelEntry> {
     let mut entries = collect_agent_panel_entries_with_runtimes(app, terminal_runtimes);
     crate::app::agent_view::apply_agent_view(app, &mut entries);
+    for (position, entry) in entries.iter_mut().enumerate() {
+        entry.index = position + 1;
+    }
     entries
 }
 
@@ -161,6 +166,7 @@ fn collect_agent_panel_entries_with_runtimes(
                             .get(detail.tab_idx)
                             .is_some_and(|tab| !tab.is_auto_named());
                     AgentPanelEntry {
+                        index: 0,
                         ws_idx,
                         tab_idx: detail.tab_idx,
                         pane_id: detail.pane_id,
@@ -1035,6 +1041,7 @@ fn resolved_token_spans(
         .iter()
         .map(|token| match &token.kind {
             ResolvedTokenKind::StateText(text)
+            | ResolvedTokenKind::Index(text)
             | ResolvedTokenKind::Workspace(text)
             | ResolvedTokenKind::Tab(text)
             | ResolvedTokenKind::Pane(text)
@@ -1145,7 +1152,8 @@ fn resolved_token_spans(
                     apply_token_style(workspace_style, token.style),
                 ));
             }
-            ResolvedTokenKind::Tab(text)
+            ResolvedTokenKind::Index(text)
+            | ResolvedTokenKind::Tab(text)
             | ResolvedTokenKind::Pane(text)
             | ResolvedTokenKind::Agent(text)
             | ResolvedTokenKind::Branch(text) => {
@@ -1201,6 +1209,13 @@ fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) 
             style.add_modifier(Modifier::DIM)
         } else {
             style.remove_modifier(Modifier::DIM)
+        };
+    }
+    if let Some(italic) = patch.italic {
+        style = if italic {
+            style.add_modifier(Modifier::ITALIC)
+        } else {
+            style.remove_modifier(Modifier::ITALIC)
         };
     }
     style
@@ -1884,11 +1899,36 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
     }
 
     #[test]
+    fn italic_patch_preserves_other_modifiers_and_can_be_disabled() {
+        let base = Style::default().add_modifier(Modifier::BOLD | Modifier::DIM);
+        let on = apply_token_style(
+            base,
+            crate::config::SidebarTokenStyle {
+                italic: Some(true),
+                ..Default::default()
+            },
+        );
+        assert!(on
+            .add_modifier
+            .contains(Modifier::ITALIC | Modifier::BOLD | Modifier::DIM));
+        assert_eq!(apply_token_style(on, Default::default()), on);
+        let off = apply_token_style(
+            on,
+            crate::config::SidebarTokenStyle {
+                italic: Some(false),
+                ..Default::default()
+            },
+        );
+        assert!(!off.add_modifier.contains(Modifier::ITALIC));
+        assert!(off.add_modifier.contains(Modifier::BOLD | Modifier::DIM));
+    }
+
+    #[test]
     fn space_occurrence_style_applies_without_styling_separator() {
         let config: crate::config::Config = toml::from_str(
             r##"
 [ui.sidebar.spaces]
-rows = [[{ token = "$hype", fg = "#abcdef", bold = true, dim = false }, "workspace"]]
+rows = [[{ token = "$hype", fg = "#abcdef", bold = true, dim = false, italic = true }, "workspace"]]
 "##,
         )
         .unwrap();
@@ -1916,6 +1956,7 @@ rows = [[{ token = "$hype", fg = "#abcdef", bold = true, dim = false }, "workspa
         let separator = buffer[(find_symbol_x(buffer, row, 25, "·"), row)].style();
 
         for style in [h, i] {
+            assert!(style.add_modifier.contains(Modifier::ITALIC));
             assert_eq!(style.fg, Some(ratatui::style::Color::Rgb(0xab, 0xcd, 0xef)));
             assert!(style.add_modifier.contains(Modifier::BOLD));
             assert!(!style.add_modifier.contains(Modifier::DIM));
@@ -1924,6 +1965,7 @@ rows = [[{ token = "$hype", fg = "#abcdef", bold = true, dim = false }, "workspa
         assert_eq!(separator.fg, Some(app.palette.overlay0));
         assert!(separator.add_modifier.contains(Modifier::DIM));
         assert!(!separator.add_modifier.contains(Modifier::BOLD));
+        assert!(!separator.add_modifier.contains(Modifier::ITALIC));
         assert_eq!(separator.bg, Some(app.palette.active_row_bg));
     }
 

@@ -98,12 +98,14 @@ pub struct SidebarTokenStyle {
     pub fg: Option<SidebarTokenColor>,
     pub bold: Option<bool>,
     pub dim: Option<bool>,
+    pub italic: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSidebarToken {
     StateIcon,
     StateText,
+    Index,
     Workspace,
     Tab,
     Pane,
@@ -159,6 +161,8 @@ struct RawStyledSidebarToken {
     bold: Option<bool>,
     #[serde(default)]
     dim: Option<bool>,
+    #[serde(default)]
+    italic: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -178,6 +182,7 @@ impl RawSidebarToken {
                     fg: token.fg,
                     bold: token.bold,
                     dim: token.dim,
+                    italic: token.italic,
                 }),
             ),
         }
@@ -227,6 +232,9 @@ where
     if let Some(dim) = style.dim {
         map.serialize_entry("dim", &dim)?;
     }
+    if let Some(italic) = style.italic {
+        map.serialize_entry("italic", &italic)?;
+    }
     map.end()
 }
 
@@ -234,6 +242,7 @@ fn agent_token_name(token: &AgentSidebarToken) -> String {
     match token {
         AgentSidebarToken::StateIcon => "state_icon".into(),
         AgentSidebarToken::StateText => "state_text".into(),
+        AgentSidebarToken::Index => "index".into(),
         AgentSidebarToken::Workspace => "workspace".into(),
         AgentSidebarToken::Tab => "tab".into(),
         AgentSidebarToken::Pane => "pane".into(),
@@ -288,6 +297,7 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
             &[
                 ("state_icon", Self::StateIcon),
                 ("state_text", Self::StateText),
+                ("index", Self::Index),
                 ("workspace", Self::Workspace),
                 ("tab", Self::Tab),
                 ("pane", Self::Pane),
@@ -555,6 +565,33 @@ rows = [[{ token = "git_status", fg = "#ff00aa" }], [{ token = "$jj", bold = tru
         let (token, style) = config.ui.sidebar.spaces.rows[1][0].parts();
         assert_eq!(token, &SpaceSidebarToken::Custom("jj".into()));
         assert_eq!(style.bold, Some(true));
+    }
+
+    #[test]
+    fn italic_styles_round_trip_and_default_to_unset() {
+        let input = r#"
+[ui.sidebar.agents]
+rows = [["state_icon", { token = "agent", bold = true }, "$model"], [{ token = "$topic", dim = true, italic = true }]]
+[ui.sidebar.spaces]
+rows = [[{ token = "workspace", italic = false }]]
+"#;
+        let config: crate::config::Config = toml::from_str(input).unwrap();
+        assert_eq!(config.ui.sidebar.agents.rows[0][0].parts().1.italic, None);
+        assert_eq!(config.ui.sidebar.agents.rows[0][1].parts().1.italic, None);
+        let topic = config.ui.sidebar.agents.rows[1][0].parts().1;
+        assert_eq!(topic.italic, Some(true));
+        assert_eq!(topic.dim, Some(true));
+        assert_eq!(
+            config.ui.sidebar.spaces.rows[0][0].parts().1.italic,
+            Some(false)
+        );
+        let encoded = toml::to_string(&config.ui.sidebar).unwrap();
+        let decoded: SidebarConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded, config.ui.sidebar);
+        assert!(toml::from_str::<crate::config::Config>(
+            "[ui.sidebar.agents]\nrows = [[{ token = \"$topic\", italic = \"yes\" }]]"
+        )
+        .is_err());
     }
 
     #[test]
