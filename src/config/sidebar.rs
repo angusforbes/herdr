@@ -46,6 +46,29 @@ impl SidebarTokenColor {
     pub(crate) fn ratatui(self) -> ratatui::style::Color {
         ratatui::style::Color::Rgb(self.r, self.g, self.b)
     }
+
+    /// Parse `#RGB` / `#RRGGBB`; `None` for anything else.
+    pub(crate) fn parse_hex(value: &str) -> Option<Self> {
+        let hex = value.trim().strip_prefix('#')?;
+        if !hex.is_ascii() || !matches!(hex.len(), 3 | 6) {
+            return None;
+        }
+        if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        let channel = |i: usize| -> u8 {
+            if hex.len() == 3 {
+                (char::from(hex.as_bytes()[i]).to_digit(16).unwrap_or(0) as u8) * 17
+            } else {
+                u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0)
+            }
+        };
+        Some(Self {
+            r: channel(0),
+            g: channel(1),
+            b: channel(2),
+        })
+    }
 }
 
 impl Serialize for SidebarTokenColor {

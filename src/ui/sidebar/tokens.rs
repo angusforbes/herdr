@@ -77,11 +77,14 @@ pub(super) fn agent_rows(
                             .terminal_title_stripped
                             .clone()
                             .map(ResolvedTokenKind::TerminalTitle),
-                        AgentSidebarToken::Custom(name) => entry
-                            .tokens
-                            .get(name)
-                            .cloned()
-                            .map(ResolvedTokenKind::Custom),
+                        AgentSidebarToken::Custom(name) => {
+                            let value = entry.tokens.get(name).cloned()?;
+                            // A pane may style its own custom token by reporting sibling
+                            // tokens: `<name>_fg=#rrggbb`, `<name>_bold=true`, `<name>_italic=true`.
+                            // Explicit config styling still wins.
+                            let style = custom_token_style(&entry.tokens, name, style);
+                            return Some(ResolvedToken::new(ResolvedTokenKind::Custom(value), style));
+                        }
                         AgentSidebarToken::Styled { .. } => None,
                     }?;
                     Some(ResolvedToken::new(kind, style))
@@ -90,6 +93,33 @@ pub(super) fn agent_rows(
             (!resolved.is_empty()).then_some(resolved)
         })
         .collect()
+}
+
+fn custom_token_style(
+    tokens: &std::collections::HashMap<String, String>,
+    name: &str,
+    mut style: SidebarTokenStyle,
+) -> SidebarTokenStyle {
+    let flag = |suffix: &str| {
+        tokens
+            .get(&format!("{name}_{suffix}"))
+            .map(|v| matches!(v.trim(), "true" | "1" | "yes" | "on"))
+    };
+    if style.fg.is_none() {
+        style.fg = tokens
+            .get(&format!("{name}_fg"))
+            .and_then(|v| crate::config::SidebarTokenColor::parse_hex(v));
+    }
+    if style.bold.is_none() {
+        style.bold = flag("bold");
+    }
+    if style.italic.is_none() {
+        style.italic = flag("italic");
+    }
+    if style.dim.is_none() {
+        style.dim = flag("dim");
+    }
+    style
 }
 
 pub(super) struct SpaceTokenContext<'a> {
@@ -340,5 +370,37 @@ mod tests {
                 "2 changes".into()
             ))]]
         );
+    }
+}
+
+#[cfg(test)]
+mod custom_style_tests {
+    use super::*;
+
+    #[test]
+    fn custom_token_takes_style_from_sibling_tokens_unless_configured() {
+        let mut tokens = std::collections::HashMap::new();
+        tokens.insert("name".to_string(), "Splice".to_string());
+        tokens.insert("name_fg".to_string(), "#ff8800".to_string());
+        tokens.insert("name_bold".to_string(), "true".to_string());
+        let style = custom_token_style(&tokens, "name", SidebarTokenStyle::default());
+        assert_eq!(
+            style.fg.map(|c| c.ratatui()),
+            Some(ratatui::style::Color::Rgb(0xff, 0x88, 0x00))
+        );
+        assert_eq!(style.bold, Some(true));
+        assert_eq!(style.italic, None);
+
+        let configured = SidebarTokenStyle {
+            fg: crate::config::SidebarTokenColor::parse_hex("#000"),
+            bold: Some(false),
+            ..Default::default()
+        };
+        let style = custom_token_style(&tokens, "name", configured);
+        assert_eq!(style.fg.map(|c| c.ratatui()), Some(ratatui::style::Color::Rgb(0, 0, 0)));
+        assert_eq!(style.bold, Some(false));
+
+        tokens.insert("name_fg".to_string(), "orange".to_string());
+        assert_eq!(custom_token_style(&tokens, "name", SidebarTokenStyle::default()).fg, None);
     }
 }
