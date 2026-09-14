@@ -207,6 +207,11 @@ impl App {
             return Vec::new();
         }
 
+        if let AppEvent::SearchPaneAiFinished { generation, result } = ev {
+            self.handle_search_pane_ai_finished(generation, result);
+            return Vec::new();
+        }
+
         if let AppEvent::PaneDied { pane_id } = &ev {
             if self
                 .state

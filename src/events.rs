@@ -171,4 +171,9 @@ pub enum AppEvent {
     WorktreeAddFinished(Box<WorktreeAddResult>),
     /// Background `git worktree remove` completed.
     WorktreeRemoveFinished(Box<WorktreeRemoveResult>),
+    /// The AI search command for the search pane finished.
+    SearchPaneAiFinished {
+        generation: u64,
+        result: Result<String, String>,
+    },
 }

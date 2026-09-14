@@ -14,12 +14,13 @@ mod onboarding;
 mod panes;
 mod release_notes;
 mod scrollbar;
+mod search_pane;
 mod settings;
 mod sidebar;
 mod status;
 mod tab_surface;
 mod tabs;
-mod text;
+pub(crate) mod text;
 mod widgets;
 
 use self::dialogs::{
@@ -51,6 +52,7 @@ pub(crate) use self::scrollbar::{
     pane_scrollbar_rect, release_notes_scrollbar_rect, scrollbar_offset_from_drag_row,
     scrollbar_offset_from_row, scrollbar_thumb_grab_offset, should_show_scrollbar,
 };
+use self::search_pane::render_search_pane;
 use self::settings::render_settings_overlay;
 #[cfg(test)]
 pub(crate) use self::sidebar::workspace_drop_indicator_row;
@@ -77,6 +79,7 @@ pub(crate) use self::{
     },
     sidebar::{
         agent_entry_gap, agent_entry_height_in_body, agent_panel_body_rect, agent_panel_entries,
+        agent_panel_entries_from,
         agent_panel_scroll_for_target, agent_panel_scroll_metrics, agent_panel_scrollbar_rect,
         agent_panel_toggle_rect, all_agent_panel_entries, collapsed_sidebar_sections,
         collapsed_sidebar_toggle_rect, compute_workspace_card_areas, expanded_sidebar_sections,
@@ -236,6 +239,14 @@ fn compute_view_internal(
 
     let [sidebar_area, main_area] =
         Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(area);
+    let search_w = crate::app::search_pane::search_pane_width(app, main_area);
+    let (main_area, search_pane_rect) = if search_w > 0 {
+        let [main_area, search_pane_rect] =
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(search_w)]).areas(main_area);
+        (main_area, search_pane_rect)
+    } else {
+        (main_area, Rect::default())
+    };
 
     let (tab_bar_rect, terminal_area) = app
         .active
@@ -319,6 +330,7 @@ fn compute_view_internal(
         toast_hit_area,
         pane_infos,
         split_borders,
+        search_pane_rect,
     };
     app.sync_copy_mode_search_geometry();
 }
@@ -382,6 +394,7 @@ fn compute_mobile_view(
         toast_hit_area,
         pane_infos,
         split_borders,
+        search_pane_rect: Rect::default(),
     };
     app.sync_copy_mode_search_geometry();
 }
@@ -413,6 +426,10 @@ pub fn render_with_runtime_registry(
         render_tab_surface(app, terminal_runtimes, app.view.tab_surface(), frame);
     } else {
         render_empty(app, frame, terminal_area);
+    }
+
+    if app.view.search_pane_rect.width > 0 {
+        render_search_pane(app, frame, app.view.search_pane_rect);
     }
 
     // Ambient notifications sit above panes, but below interactive overlays.
@@ -457,7 +474,7 @@ pub fn render_with_runtime_registry(
         Mode::GlobalMenu => render_global_launcher_menu(app, frame),
         Mode::KeybindHelp => render_keybind_help_overlay(app, frame),
         Mode::Navigator => render_navigator_overlay(app, terminal_runtimes, frame),
-        Mode::Terminal => {}
+        Mode::SearchPane | Mode::Terminal => {}
     }
 }
 

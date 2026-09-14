@@ -291,6 +291,14 @@ impl TerminalRuntime {
         self.0.search_text_matches(query, case_sensitive)
     }
 
+    pub(crate) fn search_text_matches_with_lines(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+    ) -> Vec<(crate::pane::TerminalTextMatch, String)> {
+        self.0.search_text_matches_with_lines(query, case_sensitive)
+    }
+
     pub(crate) fn text_match_is_current(&self, text_match: crate::pane::TerminalTextMatch) -> bool {
         self.0.text_match_is_current(text_match)
     }

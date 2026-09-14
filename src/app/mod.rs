@@ -18,6 +18,7 @@ mod git_refresh;
 mod ids;
 mod input;
 pub(crate) mod pane_graphics;
+pub(crate) mod search_pane;
 mod popup;
 mod runtime;
 mod runtime_mutations;
@@ -583,6 +584,7 @@ impl App {
             }),
             keybind_help: state::KeybindHelpState::default(),
             navigator: state::NavigatorState::default(),
+            search_pane: search_pane::SearchPaneState::default(),
             copy_mode: None,
             workspace_scroll: 0,
             agent_panel_scroll: 0,
@@ -604,6 +606,7 @@ impl App {
                 toast_hit_area: Rect::default(),
                 pane_infos: Vec::new(),
                 split_borders: Vec::new(),
+                search_pane_rect: Rect::default(),
             },
             drag: None,
             workspace_presses: HashMap::new(),
@@ -1946,6 +1949,7 @@ impl App {
             Mode::Navigator => {
                 input::handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event);
             }
+            Mode::SearchPane => self.handle_search_pane_terminal_key(&key),
             Mode::Terminal => {
                 // Should not be called in terminal mode.
             }
@@ -2218,6 +2222,7 @@ mod tests {
         // Everything else (terminal, text entry, startup overlays) keeps the user's IME.
         for mode in [
             Mode::Terminal,
+            Mode::SearchPane,
             Mode::RenameWorkspace,
             Mode::RenameTab,
             Mode::RenamePane,

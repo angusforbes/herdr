@@ -252,6 +252,19 @@ impl PaneTerminal {
         buffer.search(query, case_sensitive, active_screen)
     }
 
+    /// Like [`Self::search_text_matches`], but pairs each match with the full
+    /// unwrapped logical line it was found on (for search-result snippets).
+    pub(crate) fn search_text_matches_with_lines(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+    ) -> Vec<(TerminalTextMatch, String)> {
+        let Some((buffer, active_screen)) = self.retained_text_buffer() else {
+            return Vec::new();
+        };
+        buffer.search_with_lines(query, case_sensitive, active_screen)
+    }
+
     pub(crate) fn text_match_is_current(&self, text_match: TerminalTextMatch) -> bool {
         self.text_matches_are_current(&[text_match])
             .first()
@@ -748,6 +761,18 @@ impl RetainedTextBuffer {
         case_sensitive: bool,
         active_screen: crate::ghostty::ActiveScreen,
     ) -> Vec<TerminalTextMatch> {
+        self.search_with_lines(query, case_sensitive, active_screen)
+            .into_iter()
+            .map(|(text_match, _)| text_match)
+            .collect()
+    }
+
+    fn search_with_lines(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+        active_screen: crate::ghostty::ActiveScreen,
+    ) -> Vec<(TerminalTextMatch, String)> {
         if query.is_empty() {
             return Vec::new();
         }
@@ -774,13 +799,16 @@ impl RetainedTextBuffer {
                 };
                 let start_span = &line.spans[start_index];
                 let end_span = &line.spans[end_index];
-                matches.push(TerminalTextMatch {
-                    start: start_span.start,
-                    end: end_span.end,
-                    source_fingerprint: text_fingerprint(found.as_str()),
-                    scan_cols: self.cols,
-                    scan_screen: active_screen,
-                });
+                matches.push((
+                    TerminalTextMatch {
+                        start: start_span.start,
+                        end: end_span.end,
+                        source_fingerprint: text_fingerprint(found.as_str()),
+                        scan_cols: self.cols,
+                        scan_screen: active_screen,
+                    },
+                    line.text.clone(),
+                ));
             }
         }
         matches

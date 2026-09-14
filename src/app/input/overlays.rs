@@ -19,7 +19,47 @@ fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
 }
 
 impl App {
+    /// Mouse events inside the right-hand search pane. Active in every mode that
+    /// shows it (Terminal, SearchPane, Navigate, ...) but not under modal overlays.
+    fn handle_search_pane_mouse(&mut self, mouse: MouseEvent) -> bool {
+        let rect = self.state.view.search_pane_rect;
+        if rect.width == 0 || !rect_contains(rect, mouse.column, mouse.row) {
+            // Clicking anywhere else while typing in the search pane hands focus back.
+            if self.state.mode == Mode::SearchPane
+                && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            {
+                self.state.leave_search_pane_focus();
+            }
+            return false;
+        }
+        if !matches!(
+            self.state.mode,
+            Mode::Terminal | Mode::SearchPane | Mode::Navigate | Mode::Copy
+        ) {
+            return false;
+        }
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(click) = crate::app::search_pane::click_target(
+                    &self.state.search_pane,
+                    rect,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    self.handle_search_pane_click(click);
+                }
+            }
+            MouseEventKind::ScrollUp => self.state.scroll_search_pane(-3),
+            MouseEventKind::ScrollDown => self.state.scroll_search_pane(3),
+            _ => {}
+        }
+        true
+    }
+
     pub(super) fn handle_overlay_mouse(&mut self, mouse: MouseEvent) -> bool {
+        if self.handle_search_pane_mouse(mouse) {
+            return true;
+        }
         if self.state.mode == Mode::ReleaseNotes {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left)

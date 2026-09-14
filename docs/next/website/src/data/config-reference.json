@@ -308,6 +308,12 @@
           "description": "Open the session navigator."
         },
         {
+          "key": "keys.search_pane",
+          "type": "keybinding",
+          "default": "\"ctrl+s\"",
+          "description": "Toggle the right-hand search pane (keyword / AI search across agent panes)."
+        },
+        {
           "key": "keys.navigate_workspace_up",
           "type": "keybinding",
           "default": "\"up\"",

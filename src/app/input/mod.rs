@@ -57,6 +57,7 @@ pub(crate) use self::{
     },
     navigate::{
         terminal_direct_indexed_navigation_action, terminal_direct_non_indexed_navigation_action,
+        NavigateAction,
     },
     settings::open_settings_at,
 };
@@ -117,6 +118,7 @@ impl App {
                 Mode::Navigator => {
                     handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event)
                 }
+                Mode::SearchPane => self.handle_search_pane_terminal_key(&key),
                 Mode::Terminal => unreachable!(),
             },
         }
@@ -234,6 +236,10 @@ impl App {
                     return false;
                 }
                 insert_navigator_search_text(&mut self.state, &self.terminal_runtimes, text);
+                true
+            }
+            Mode::SearchPane => {
+                self.state.search_pane_insert_text(text);
                 true
             }
             Mode::KeybindHelp => {
@@ -734,6 +740,7 @@ pub(crate) fn modal_paste_target_active(state: &AppState) -> bool {
             .as_ref()
             .is_some_and(|open| open.search_focused),
         Mode::Navigator => state.navigator.search_focused,
+        Mode::SearchPane => true,
         Mode::KeybindHelp => state.keybind_help.search_focused,
         Mode::Copy => state
             .copy_mode
