@@ -64,6 +64,9 @@ pub(crate) struct SearchGroup {
     pub title: String,
     /// e.g. "Work · claude-fable-5-1".
     pub subtitle: String,
+    /// The pane's metadata tokens (`name`, `name_fg`, ...) so the agent's display
+    /// name renders exactly as in the left sidebar.
+    pub tokens: std::collections::HashMap<String, String>,
     /// Newest first.
     pub hits: Vec<SearchHit>,
 }
@@ -76,6 +79,7 @@ pub(crate) struct AiPaneRef {
     pub pane_id: PaneId,
     pub title: String,
     pub subtitle: String,
+    pub tokens: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -408,6 +412,7 @@ impl AppState {
                 pane_id: entry.pane_id,
                 title: group_title(entry),
                 subtitle: group_subtitle(entry),
+                tokens: entry.tokens.clone(),
                 hits,
             });
         }
@@ -506,7 +511,7 @@ fn group_title(entry: &AgentPanelEntry) -> String {
         .cloned()
         .or_else(|| entry.agent_label.clone())
         .unwrap_or_else(|| entry.primary_label.clone());
-    format!("{}. {}", entry.index, label)
+    format!("{} · {}", entry.index, label)
 }
 
 fn group_subtitle(entry: &AgentPanelEntry) -> String {
@@ -666,6 +671,7 @@ impl App {
                 pane_id: entry.pane_id,
                 title: group_title(entry),
                 subtitle: group_subtitle(entry),
+                tokens: entry.tokens.clone(),
             });
             if budget == 0 {
                 break;
@@ -770,6 +776,7 @@ impl App {
                 pane_id: pane.pane_id,
                 title: pane.title.clone(),
                 subtitle: pane.subtitle.clone(),
+                tokens: pane.tokens.clone(),
                 hits,
             });
         }
@@ -936,6 +943,7 @@ mod tests {
             pane_id: PaneId::from_raw(1),
             title: String::new(),
             subtitle: String::new(),
+            tokens: Default::default(),
             hits: (0..n)
                 .map(|r| make_hit(m(r as u32), "x", "x"))
                 .collect(),
@@ -968,6 +976,7 @@ mod tests {
             pane_id: PaneId::from_raw(1),
             title: "t".into(),
             subtitle: String::new(),
+            tokens: Default::default(),
             hits: vec![make_hit(m(0), "x", "x")],
         }];
         let rect = Rect::new(100, 0, 40, 20);

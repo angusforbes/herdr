@@ -171,7 +171,7 @@ pub(super) fn agent_rows(
         .collect()
 }
 
-fn custom_token_style(
+pub(super) fn custom_token_style(
     tokens: &std::collections::HashMap<String, String>,
     name: &str,
     mut style: SidebarTokenStyle,

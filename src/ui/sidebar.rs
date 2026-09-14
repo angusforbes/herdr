@@ -1221,6 +1221,53 @@ fn resolved_token_spans(
     spans
 }
 
+/// Spans for a pane's custom token (e.g. `name`) styled exactly as the sidebar renders it:
+/// sibling `<name>_fg/_bold/_italic/_dim` tokens plus inline `{#rrggbb}` markup, on top of `base`.
+/// Returns `None` when the token is absent or empty.
+pub(crate) fn custom_token_spans(
+    tokens_map: &std::collections::HashMap<String, String>,
+    name: &str,
+    base: Style,
+    max_width: usize,
+) -> Option<Vec<Span<'static>>> {
+    let value = tokens_map.get(name).filter(|v| !v.trim().is_empty())?;
+    let patch = tokens::custom_token_style(tokens_map, name, Default::default());
+    let base = apply_token_style(base, patch);
+    let (plain, rich) = tokens::parse_rich_markup(value);
+    let shown = truncate_end(&plain, max_width);
+    let Some(rich) = rich else {
+        return Some(vec![Span::styled(shown, base)]);
+    };
+    let mut spans = Vec::new();
+    let mut remaining = shown.as_str();
+    for segment in &rich {
+        if remaining.is_empty() {
+            break;
+        }
+        let take = segment
+            .text
+            .char_indices()
+            .map(|(i, c)| i + c.len_utf8())
+            .take_while(|&end| {
+                remaining.len() >= end
+                    && remaining.is_char_boundary(end)
+                    && remaining[..end] == segment.text[..end]
+            })
+            .last()
+            .unwrap_or(0);
+        if take == 0 {
+            break;
+        }
+        let style = segment.fg.map_or(base, |fg| base.fg(fg.ratatui()));
+        spans.push(Span::styled(remaining[..take].to_string(), style));
+        remaining = &remaining[take..];
+    }
+    if !remaining.is_empty() {
+        spans.push(Span::styled(remaining.to_string(), base));
+    }
+    Some(spans)
+}
+
 fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) -> Style {
     if let Some(fg) = patch.fg {
         style = style.fg(fg.ratatui());

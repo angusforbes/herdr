@@ -120,12 +120,27 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
             BodyRow::Gap => {}
             BodyRow::Group(g) => {
                 let group = &state.groups[*g];
-                let title_w = display_width(&group.title);
+                let title = truncate_end(&group.title, width.saturating_sub(1));
+                let mut used = display_width(&title) + 1;
                 let mut spans = vec![Span::styled(
-                    format!(" {}", truncate_end(&group.title, width.saturating_sub(1))),
+                    format!(" {title}"),
                     Style::default().fg(p.text).add_modifier(Modifier::BOLD),
                 )];
-                let remaining = width.saturating_sub(title_w + 4);
+                // The agent's display name, styled exactly as the left sidebar draws it.
+                if let Some(name_spans) = super::custom_token_spans(
+                    &group.tokens,
+                    "name",
+                    Style::default().fg(p.text),
+                    width.saturating_sub(used + 3),
+                ) {
+                    spans.push(Span::styled("  ", Style::default()));
+                    used += 2;
+                    for span in name_spans {
+                        used += display_width(&span.content);
+                        spans.push(span);
+                    }
+                }
+                let remaining = width.saturating_sub(used + 3);
                 if remaining > 4 && !group.subtitle.is_empty() {
                     spans.push(Span::styled(
                         format!("  {}", truncate_end(&group.subtitle, remaining)),
