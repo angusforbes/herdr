@@ -205,7 +205,7 @@ pub(super) fn state_icon_symbol(
         (StatusIndicatorStyle::Dots, AgentState::Idle, true) => "○",
         (StatusIndicatorStyle::Dots, AgentState::Unknown, _) => "·",
         (StatusIndicatorStyle::Symbols, AgentState::Blocked, _) => "×",
-        (StatusIndicatorStyle::Symbols, AgentState::Working, _) => "◐",
+        (StatusIndicatorStyle::Symbols, AgentState::Working, _) => "●",
         (StatusIndicatorStyle::Symbols, AgentState::Idle, false) => "✓",
         (StatusIndicatorStyle::Symbols, AgentState::Idle, true) => "○",
         (StatusIndicatorStyle::Symbols, AgentState::Unknown, _) => "·",
@@ -270,7 +270,7 @@ mod tests {
         let palette = Palette::catppuccin();
         for (indicator_style, expected_symbols) in [
             (StatusIndicatorStyle::Dots, ["●", "●", "●", "○", "·"]),
-            (StatusIndicatorStyle::Symbols, ["×", "◐", "✓", "○", "·"]),
+            (StatusIndicatorStyle::Symbols, ["×", "●", "✓", "○", "·"]),
         ] {
             for ((state, seen, color), expected_symbol) in [
                 (AgentState::Blocked, true, palette.red),
