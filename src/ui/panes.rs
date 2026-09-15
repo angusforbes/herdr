@@ -406,6 +406,7 @@ pub(super) fn render_panes(
                 true,
             );
             render_copy_mode_cursor(app, frame, info);
+            render_search_jump_highlight(app, frame, info, rt);
         }
     }
 
@@ -836,6 +837,67 @@ fn render_copy_mode_search_highlights(
                 frame.buffer_mut()[(x, y)].set_style(style);
             }
         }
+    }
+}
+
+/// Paint the search-pane result the user jumped to: its whole line tinted, the
+/// matched text itself in the accent colour. Stays while the search pane is open.
+fn render_search_jump_highlight(
+    app: &AppState,
+    frame: &mut Frame,
+    info: &PaneInfo,
+    rt: &crate::terminal::TerminalRuntime,
+) {
+    let Some(jump) = app.search_pane.jump_highlight else {
+        return;
+    };
+    if jump.pane_id != info.id || app.view.search_pane_rect.width == 0 {
+        return;
+    }
+    if !rt.text_match_is_current(jump.text_match) {
+        return;
+    }
+    let Some(metrics) = rt.scroll_metrics() else {
+        return;
+    };
+    let top = metrics
+        .max_offset_from_bottom
+        .saturating_sub(metrics.offset_from_bottom)
+        .min(u32::MAX as usize) as u32;
+    let height = info.inner_rect.height;
+    let width = info.inner_rect.width;
+    if height == 0 || width == 0 {
+        return;
+    }
+    let bottom = top.saturating_add(u32::from(height - 1));
+    let m = jump.text_match;
+    if m.end.row < top || m.start.row > bottom {
+        return;
+    }
+    let line_style = Style::default().bg(app.palette.surface1);
+    let match_style = Style::default()
+        .fg(panel_contrast_fg(&app.palette))
+        .bg(app.palette.accent)
+        .add_modifier(Modifier::BOLD);
+    let buf = frame.buffer_mut();
+    for absolute_row in m.start.row.max(top)..=m.end.row.min(bottom) {
+        let y = info.inner_rect.y + (absolute_row - top) as u16;
+        for col in 0..width {
+            let cell = &mut buf[(info.inner_rect.x + col, y)];
+            cell.set_style(cell.style().patch(line_style));
+        }
+        let start_col = if absolute_row == m.start.row { m.start.col } else { 0 };
+        let end_col = if absolute_row == m.end.row { m.end.col } else { width - 1 };
+        for col in start_col..=end_col.min(width - 1) {
+            buf[(info.inner_rect.x + col, y)].set_style(match_style);
+        }
+    }
+    // A marker in the left gutter so the line is findable even when the match is scrolled off-screen horizontally.
+    let y = info.inner_rect.y + (m.start.row.max(top) - top) as u16;
+    let marker = &mut buf[(info.inner_rect.x, y)];
+    if m.start.col > 0 {
+        marker.set_symbol("▶");
+        marker.set_style(Style::default().fg(app.palette.accent).add_modifier(Modifier::BOLD));
     }
 }
 

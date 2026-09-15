@@ -97,6 +97,14 @@ pub(crate) struct SearchPaneState {
     pub ai_generation: u64,
     pub ai_inflight: bool,
     pub ai_panes: Vec<AiPaneRef>,
+    /// The hit last jumped to, highlighted inside its pane while the search pane is open.
+    pub jump_highlight: Option<JumpHighlight>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct JumpHighlight {
+    pub pane_id: PaneId,
+    pub text_match: TerminalTextMatch,
 }
 
 impl SearchPaneState {
@@ -123,6 +131,7 @@ impl SearchPaneState {
 
     fn invalidate(&mut self) {
         self.selected = None;
+        self.jump_highlight = None;
         if self.searched.is_some() && !self.results_fresh() {
             self.status = Some("enter to search".into());
         }
@@ -293,6 +302,7 @@ impl AppState {
     pub(crate) fn toggle_search_pane(&mut self) {
         if self.search_pane.visible {
             self.search_pane.visible = false;
+            self.search_pane.jump_highlight = None;
             if self.mode == Mode::SearchPane {
                 self.leave_search_pane_focus();
             }
@@ -387,6 +397,7 @@ impl AppState {
         self.search_pane.scroll = 0;
         if query.is_empty() {
             self.search_pane.groups.clear();
+            self.search_pane.jump_highlight = None;
             self.search_pane.searched = None;
             self.search_pane.status = None;
             return;
@@ -437,6 +448,7 @@ impl AppState {
         };
         let (ws_idx, tab_idx, pane_id, row) =
             (group.ws_idx, group.tab_idx, group.pane_id, hit.text_match.start.row);
+        let text_match = hit.text_match;
         if !self.focus_navigator_target(NavigatorTarget::Pane {
             ws_idx,
             tab_idx,
@@ -454,6 +466,10 @@ impl AppState {
             }
         }
         self.search_pane.selected = Some(flat);
+        self.search_pane.jump_highlight = Some(JumpHighlight {
+            pane_id,
+            text_match,
+        });
         // focus_navigator_target leaves us in Terminal mode: keyboard goes to the pane,
         // the search pane stays open with its query and results.
         true
@@ -630,6 +646,7 @@ impl App {
         self.state.search_pane.scroll = 0;
         if query.is_empty() {
             self.state.search_pane.groups.clear();
+            self.state.search_pane.jump_highlight = None;
             self.state.search_pane.searched = None;
             self.state.search_pane.status = None;
             return;
@@ -679,6 +696,7 @@ impl App {
         }
         if panes.is_empty() {
             self.state.search_pane.groups.clear();
+            self.state.search_pane.jump_highlight = None;
             self.state.search_pane.status = Some("no agent panes to search".into());
             self.state.search_pane.searched = Some((query, SearchPaneMode::Ai));
             return;
@@ -689,6 +707,7 @@ impl App {
         self.state.search_pane.ai_inflight = true;
         self.state.search_pane.ai_panes = panes;
         self.state.search_pane.groups.clear();
+            self.state.search_pane.jump_highlight = None;
         self.state.search_pane.status = Some("thinking…".into());
         self.state.search_pane.searched = Some((query.clone(), SearchPaneMode::Ai));
 
@@ -1052,6 +1071,7 @@ mod app_tests {
         app.state.toggle_search_pane();
         assert!(!app.state.search_pane.visible);
         assert_eq!(app.state.search_pane.query, "alp", "query survives hiding");
+        assert_eq!(app.state.search_pane.jump_highlight, None);
     }
 
     #[tokio::test]
@@ -1082,6 +1102,9 @@ mod app_tests {
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.state.mode, Mode::Terminal);
+        let jump = app.state.search_pane.jump_highlight.expect("jump highlight set");
+        assert_eq!(jump.pane_id, pane_id);
+        assert_eq!(jump.text_match.start.row as usize, target_row);
         let metrics = app
             .state
             .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
