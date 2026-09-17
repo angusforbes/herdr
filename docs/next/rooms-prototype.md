@@ -2,7 +2,7 @@
 
 Each **workspace**, not a grouped worktree space, owns a human-owned room. Desktop chrome pins `room` before terminal tabs. It is not a terminal tab, has no pane or PTY, and does not change terminal tab IDs or numbering. A terminal tab remains required by existing workspace invariants.
 
-**Saved human questions now queue runtime-only delivery to online Pi receivers.** Omit the recipient to address all current agents once, or choose one exact session. Other agents, unidentified sessions and offline Pi receivers are visibly unavailable, not silently routed through terminal input. There is no PTY injection, coordinator, collector, round loop or reply-to-reply fanout. Reads, opening/joining, registration and restart never create work. A separately enabled polling Pi adapter must claim the question and request its model turn; `queued` or `submitted` is not proof of a model answer. End-to-end model delivery and physical UI testing remain the parent's integration work.
+**Saved human questions now queue runtime-only delivery to online Pi receivers.** Omit the recipient to address all current agents once, or choose one exact session. Other agents, unidentified sessions and offline Pi receivers are visibly unavailable, not silently routed through terminal input. There is no PTY injection, coordinator, collector, round loop or reply-to-reply fanout. Reads, opening/joining, registration and restart never create work. A separately enabled polling Pi adapter must claim the question and request its model turn; `queued` or `submitted` is not proof of a model answer. Automated disposable real-model and owned-PTY handoff checks are described below; human physical UI validation and production approval remain outstanding.
 
 ## Try it safely
 
@@ -51,7 +51,21 @@ Success for a write includes `sequence`, `persistence`, `queued`, `unavailable` 
 - Status values: `queued`, `claimed`, `submitted`, `replied`, `unanswered`, `failed`, `unavailable`, `expired`. Queued means server inbox only; submitted means adapter-reported dispatch, not successful inference. Unsupported/offline members remain visible.
 - Runtime lives in `App`, **not** persisted `AppState`/snapshots. Restart/handoff loses all receivers, inbox and statuses; transcripts remain. Registration/read/join never rebuilds work from history. Cleanup is lazy on delivery/get/post/reply operations and visible-room refresh, with no filesystem/network work in rendering. Closed workspaces are removed at cleanup. Capacity: 1024 live receivers and 8192 delivery records globally; posts that exceed capacity are rejected before save. Status records are removed ten minutes after request expiry. No retry UI is implemented.
 
-Pi adapter activation is local/explicit (`HERDR_ROOM_ENABLED=1` and the intended `HERDR_SOCKET_PATH`). It must use its live session manager identity, idle/modal gating, generation cancellation, one network operation in flight and an explicit `room_reply` tool, rather than terminal text capture. See the local `integrations/room` implementation; no global extension install is part of this fork.
+### Pi opt-in commands (local adapter)
+
+The extension always registers `/room-enable`, `/room-disable` and `room_reply`, but opens **no room sockets or timers while inactive**. `room_reply` fails unless this receiver has a matching active delivery. The disposable wrapper retains startup opt-in via `HERDR_ROOM_ENABLED=1`; simply installing/loading the extension in other agents does not opt them in.
+
+For an already-running Pi without that startup flag:
+
+1. The approved receiver files must be in a Pi auto-discovered extension directory. This fork does not install them globally. Resource exclusions or `--no-extensions` can prevent loading.
+2. In that agent's **current TUI**, run `/reload`, then `/room-enable`. These are slash commands, not model prompts. No process/session restart is required.
+3. Its existing environment must already contain the **exact intended absolute `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`**. No default socket, parent `PI_SESSION_ID`, or guessed pane is used. A working Herdr live-session hook and the candidate room API are required; discovery matches the current Pi session-manager identity to the live pane/terminal/session tuple. Missing prerequisites fail closed or remain waiting, never silently switch routes.
+
+`/room-enable` opts in only this extension instance; it does not modify `process.env`, config, other Pi agents or the server. Repeating it is idempotent, not a way to retry uncertain work. `/room-disable` cancels its timer, aborts I/O and invalidates the generation immediately. It does **not** abort an already-started model turn, undo a saved reply or retry uncertain delivery. The server may show the old receiver online until its 15-second heartbeat TTL expires; re-enabling replaces its nonce and invalidates old pending work rather than replaying it.
+
+Runtime opt-in is not persisted: `/reload`, `/new`, `/resume` and `/fork` replace the Pi extension instance. Without the startup flag, run `/room-enable` again. With `HERDR_ROOM_ENABLED=1`, the new instance starts automatically even if the previous instance was disabled. An uncertain/stale receiver remains conservative: inspect the room before reload and explicit re-enable. Only **fresh human room posts** create delivery; enabling, registration, reading and rejoining never wake a model or replay history.
+
+The adapter uses idle/modal gating, generation cancellation, one network operation in flight and `room_reply`, never terminal input injection. This is a trusted local integration, not an isolation/authentication boundary.
 
 ### Standalone manual helper
 
@@ -98,5 +112,19 @@ mise x just@1.58.0 zig@0.15.2 aqua:nextest-rs/nextest/cargo-nextest@0.9.144 -- j
 ```sh
 python3 -m unittest discover -s integrations/room -v
 ```
+
+Node receiver/lifecycle tests:
+
+```sh
+node --test integrations/room/test_receiver.mjs
+```
+
+Opt-in Linux installed-to-candidate real-model handoff test (private sockets/config/auth/session copies, five harmless Haiku turns, deletes private data):
+
+```sh
+python3 integrations/room/handoff_smoke.py
+```
+
+The handoff harness checks retained Pi PIDs/start times/PTYs/session IDs, a real streamed assistant message beginning before handoff and finishing afterward with the same JSONL parent, and hot-loading an initially non-opted-in Pi via `/reload` + `/room-enable` before its persisted attributed room reply. It also attaches the actual installed Herdr TUI on an owned PTY, observes handoff disconnect, **explicitly relaunches the client on that PTY**, then verifies render, input and an actual Pi response. Installed Herdr exits on handoff; automatic same-process client reconnect is **not** supported/proven. This is automated PTY/ANSI rendering evidence, not human physical-key/pixel validation, production scale or release-build verification. Cleanup authenticates/stops the imported server even after the original server Popen exits.
 
 The earlier passive smoke test starts/stops the debug binary twice on temporary sockets and verifies saved-before-ack, read-by-sequence, stable room identity, restored transcript, and empty shell membership; it is not evidence of automatic model delivery. Current Rust tests additionally exercise broadcast capture, targeted delivery, receiver registration/replacement/heartbeat/expiry, lost-response at-most-once claims, submitted slot retention, reply/unanswered/failed release, bounded state/detail, current-session checks, restart/read/join non-replay, and save failure before dispatch/status updates. Existing legacy snapshot/reply dedup, input isolation, geometry and transcript-cache tests remain. No real model, live user session or physical UI was tested by the Rust writer. See `HANDOFF.md` for focused results and the earlier full-suite baseline/performance receipts; no new scaling work was added to pane render loops.

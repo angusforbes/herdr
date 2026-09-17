@@ -4,11 +4,11 @@ import net from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { RoomReceiver } from "./pi/receiver.mjs";
+import { RoomReceiver, registerRoomLifecycle } from "./pi/receiver.mjs";
 import { socketCall } from "./pi/transport.mjs";
 
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
-function fixture() {
+function fixture(envOverrides = {}) {
   const member = { pane_id: "w1.p1", terminal_id: "t1", session: "Path:/tmp/live.jsonl" };
   const ctx = { mode: "tui", hasUI: true, idle: true, pending: false, file: "/tmp/live.jsonl",
     isIdle() { return this.idle; }, hasPendingMessages() { return this.pending; },
@@ -23,12 +23,12 @@ function fixture() {
     get maxCalls() { return maxCalls; },
     delivery(n = 1) { return { delivery_id: `d${n}`, workspace_id: "w1", request_sequence: n, recipient: { ...member }, text: `Question ${n}`, expires_unix: 2000 }; },
   };
-  f.receiver = new RoomReceiver(pi, { HERDR_ROOM_ENABLED: "1", HERDR_SOCKET_PATH: "/tmp/explicit.sock", HERDR_PANE_ID: member.pane_id, HERDR_WORKSPACE_ID: "w1", PI_SESSION_ID: "wrong-parent" }, {
+  f.receiver = new RoomReceiver(pi, { HERDR_ROOM_ENABLED: "1", HERDR_SOCKET_PATH: "/tmp/explicit.sock", HERDR_PANE_ID: member.pane_id, HERDR_WORKSPACE_ID: "w1", PI_SESSION_ID: "wrong-parent", ...envOverrides }, {
     now: () => 1000000,
     schedule: fn => { timers.set(++timerId, fn); return timerId; }, cancel: id => timers.delete(id),
     call: async (_socket, method, params) => {
       calls++; maxCalls = Math.max(maxCalls, calls);
-      requests.push({ method, params });
+      requests.push({ socket: _socket, method, params });
       try {
         if (method === "workspace.list") return { workspaces: [{ workspace_id: "w1" }] };
         if (method === "room.get") return { members: [member] };
@@ -188,10 +188,101 @@ test("uncertain registration is not retried; missing workspace env uses exact li
 });
 
 test("missing preview opt-in, implicit socket or non-TUI never starts network resources", async () => {
-  for (const mutate of [f => { delete f.receiver.env.HERDR_ROOM_ENABLED; }, f => { delete f.receiver.env.HERDR_SOCKET_PATH; }, f => { f.ctx.mode = "rpc"; }]) {
+  for (const mutate of [f => { f.receiver.enabled = false; }, f => { delete f.receiver.env.HERDR_SOCKET_PATH; }, f => { f.ctx.mode = "rpc"; }]) {
     const f = fixture(); mutate(f); await f.receiver.start(f.ctx);
     assert.equal(f.requests.length, 0); assert.equal(f.timers.size, 0);
   }
+});
+
+test("commands register while inactive; explicit enable uses current exact binding without inference", async () => {
+  const f = fixture({ HERDR_ROOM_ENABLED: undefined });
+  const commands = new Map(), events = new Map();
+  registerRoomLifecycle({ registerCommand: (n, c) => commands.set(n, c), on: (n, h) => events.set(n, h) }, f.receiver);
+  assert.deepEqual([...commands.keys()], ["room-enable", "room-disable"]);
+  assert.equal(f.requests.length, 0);
+  await events.get("session_start")({}, f.ctx);
+  await f.receiver.tick();
+  await f.receiver.settled(f.ctx);
+  await assert.rejects(f.receiver.reply({ delivery_id: "d1", text: "no" }, f.ctx), /No matching/);
+  assert.equal(f.requests.length, 0); assert.equal(f.timers.size, 0);
+  // A captured parent session must not supply the command's identity.
+  f.ctx.file = "/tmp/current-tui.jsonl"; f.member.session = "Path:/tmp/current-tui.jsonl";
+  await commands.get("room-enable").handler("", f.ctx);
+  const g = f.receiver.run;
+  await commands.get("room-enable").handler("", f.ctx);
+  assert.equal(f.receiver.run, g); // idempotent, not a retry/reset
+  for (let n = 0; n < 3; n++) await f.tick();
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.receiver.env.HERDR_ROOM_ENABLED, undefined);
+  assert.ok(f.requests.every(r => r.socket === "/tmp/explicit.sock"));
+  assert.equal(f.requests.find(r => r.method.endsWith("register")).params.session, f.member.session);
+  assert.equal(f.requests.find(r => r.method.endsWith("register")).params.pane_id, f.member.pane_id);
+  commands.get("room-disable").handler("", f.ctx);
+  const count = f.requests.length;
+  await f.receiver.tick(); await events.get("session_start")({}, f.ctx);
+  assert.equal(f.requests.length, count); assert.equal(f.timers.size, 0);
+  assert.equal(f.receiver.run, undefined);
+  // /reload creates a new factory/receiver: no persistence of command opt-in.
+  const fresh = fixture({ HERDR_ROOM_ENABLED: undefined });
+  await fresh.receiver.start(fresh.ctx);
+  assert.equal(fresh.requests.length, 0);
+});
+
+test("explicit enable cannot infer socket, pane, or non-TUI identity", async () => {
+  for (const env of [{ HERDR_SOCKET_PATH: undefined }, { HERDR_SOCKET_PATH: "relative.sock" }, { HERDR_PANE_ID: undefined }]) {
+    const f = fixture({ HERDR_ROOM_ENABLED: undefined, ...env });
+    await f.receiver.enable(f.ctx);
+    assert.equal(f.requests.length, 0); assert.equal(f.timers.size, 0);
+  }
+  const f = fixture({ HERDR_ROOM_ENABLED: undefined }); f.ctx.mode = "rpc";
+  await assert.rejects(f.receiver.enable(f.ctx), /current Pi TUI/);
+  assert.equal(f.requests.length, 0);
+});
+
+test("disable/re-enable cancels stale claim and reply generations without retry", async () => {
+  const f = fixture({ HERDR_ROOM_ENABLED: undefined }); await f.receiver.enable(f.ctx);
+  const pending = deferred(); f.setClaim(() => pending.promise);
+  const ticking = f.tick(); await Promise.resolve();
+  const old = f.receiver.run;
+  f.receiver.disable(f.ctx);
+  assert.ok(old.abort.signal.aborted); assert.equal(f.timers.size, 0);
+  const enabling = f.receiver.enable(f.ctx);
+  pending.resolve({ delivery: f.delivery(1) }); await ticking; await enabling;
+  assert.notEqual(f.receiver.run.nonce, old.nonce); assert.equal(f.sent.length, 0);
+  f.setClaim(null); f.queue.push(f.delivery(2)); await f.tick();
+  const writing = deferred(); f.setReply(() => writing.promise);
+  const reply = f.receiver.reply({ delivery_id: "d2", text: "uncertain" }, f.ctx);
+  const failed = assert.rejects(reply, /not confirmed/); await Promise.resolve();
+  f.receiver.disable(f.ctx); const reenabled = f.receiver.enable(f.ctx);
+  writing.resolve({ persistence: "saved", sequence: 10 }); await failed; await reenabled;
+  await assert.rejects(f.receiver.reply({ delivery_id: "d2", text: "uncertain" }, f.ctx), /No matching/);
+  assert.equal(f.requests.filter(r => r.method === "room.reply").length, 1);
+  assert.equal(f.receiver.run.active, undefined); assert.equal(f.maxCalls, 1);
+  f.receiver.disable(f.ctx);
+});
+
+test("enable does not borrow another live member's pane or session", async () => {
+  for (const mutate of [f => { f.member.session = "Path:/tmp/other.jsonl"; }, f => { f.member.pane_id = "w1.other"; }]) {
+    const f = fixture({ HERDR_ROOM_ENABLED: undefined }); mutate(f);
+    await f.receiver.enable(f.ctx); await f.tick();
+    assert.ok(!f.requests.some(r => r.method.endsWith("register")));
+    assert.equal(f.sent.length, 0); f.receiver.stop();
+  }
+});
+
+test("shutdown cancels resources even if the old UI has been torn down", async () => {
+  const f = fixture(); await f.receiver.start(f.ctx); const g = f.receiver.run;
+  f.ctx.ui.setStatus = () => { throw new Error("stale UI"); };
+  f.receiver.stop();
+  assert.ok(g.abort.signal.aborted); assert.equal(f.timers.size, 0); assert.equal(f.receiver.run, undefined);
+});
+
+test("startup env opt-in still connects without a command and never changes caller env", async () => {
+  const f = fixture(); await f.receiver.start(f.ctx);
+  assert.equal(f.receiver.run.session, f.member.session); assert.equal(f.sent.length, 0);
+  f.receiver.disable(f.ctx); assert.equal(f.receiver.env.HERDR_ROOM_ENABLED, "1");
+  await f.receiver.start(f.ctx); assert.equal(f.receiver.run, undefined);
+  await f.receiver.enable(f.ctx); assert.ok(f.receiver.run); f.receiver.stop();
 });
 
 async function withSocket(handler, use) {

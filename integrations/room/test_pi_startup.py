@@ -26,6 +26,13 @@ import disposable
 class PiStartupTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("pi"), "installed Pi required")
     def test_real_loader_discovers_both_hooks_without_agent_flags_or_global_hooks(self):
+        self.check_loader(startup_optin=True)
+
+    @unittest.skipUnless(shutil.which("pi"), "installed Pi required")
+    def test_real_loader_registers_commands_without_optin_then_enable_disable_reload(self):
+        self.check_loader(startup_optin=False)
+
+    def check_loader(self, startup_optin):
         with tempfile.TemporaryDirectory(prefix="room-pi-load-") as directory:
             base = Path(directory)
             source = base / "source"
@@ -33,6 +40,8 @@ class PiStartupTests(unittest.TestCase):
             # Prove global exclusions/packages are not copied into this runtime.
             (source / "settings.json").write_text(json.dumps({"extensions": ["!**"], "packages": ["npm:not-installed-do-not-load"]}))
             env = disposable.environment(base, source)
+            if not startup_optin:
+                env.pop("HERDR_ROOM_ENABLED")
             env.update(HERDR_ENV="1", HERDR_PANE_ID="w1.p1", HERDR_WORKSPACE_ID="w1", TERM="xterm-256color")
             env.pop("PI_PACKAGE_DIR", None)
             endpoint = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -88,7 +97,23 @@ class PiStartupTests(unittest.TestCase):
             process = subprocess.Popen([shutil.which("pi")], cwd=directory, env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
             os.close(slave)
             output = bytearray()
+            def drain_for(seconds):
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    if select.select([master], [], [], .1)[0]:
+                        output.extend(os.read(master, 65536))
+
+            def command(text):
+                os.write(master, text.encode())
+                drain_for(.2)
+                os.write(master, b'\r')
+
             try:
+                if not startup_optin:
+                    drain_for(5)
+                    self.assertIn("pane.report_agent_session", requests)
+                    self.assertFalse(any(r.startswith("room.") for r in requests))
+                    command('/room-enable')
                 deadline = time.monotonic() + 30
                 while not ready.is_set() and time.monotonic() < deadline and process.poll() is None:
                     readable, _, _ = select.select([master], [], [], 0.1)
@@ -110,6 +135,20 @@ class PiStartupTests(unittest.TestCase):
                 self.assertNotIn("room.post", requests)
                 self.assertTrue(member["session"].startswith("Path:" + directory))
                 self.assertEqual(failures, [])
+                if not startup_optin:
+                    command('/room-disable')
+                    drain_for(1)
+                    count = sum(r.startswith('room.') for r in requests)
+                    drain_for(2)
+                    self.assertEqual(sum(r.startswith('room.') for r in requests), count)
+                    command('/reload')
+                    drain_for(4)
+                    self.assertEqual(sum(r.startswith('room.') for r in requests), count)
+                    ready.clear()
+                    command('/room-enable')
+                    drain_for(3)
+                    self.assertTrue(ready.is_set())
+                    self.assertIsNone(process.poll())
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGTERM)

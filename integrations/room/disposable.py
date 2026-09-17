@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import tomllib
 
 from room import call
 
@@ -54,6 +55,31 @@ def pi_config(base, source=None):
     return target
 
 
+def herdr_config(source=None):
+    """Copy presentation/keybindings, not live sessions, plugins or startup actions."""
+    source = Path(source or os.environ.get("HERDR_CONFIG_PATH") or
+                  Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "herdr/config.toml")
+    original = tomllib.loads(source.read_text()) if source.is_file() else {}
+    config = {key: original[key] for key in ("theme", "keys", "ui") if key in original}
+    config.update(onboarding=False, session={"resume_agents_on_restore": False},
+                  terminal={"default_shell": "/bin/sh", "new_cwd": original.get("terminal", {}).get("new_cwd", "follow")})
+
+    def value(item):
+        if isinstance(item, bool):
+            return "true" if item else "false"
+        if isinstance(item, str):
+            return json.dumps(item, ensure_ascii=False)
+        if isinstance(item, (int, float)):
+            return str(item)
+        if isinstance(item, list):
+            return "[" + ", ".join(value(v) for v in item) + "]"
+        if isinstance(item, dict):
+            return "{ " + ", ".join(f"{json.dumps(k)} = {value(v)}" for k, v in item.items()) + " }"
+        raise ValueError("Unsupported Herdr presentation config value")
+
+    return "\n".join(f"{key} = {value(item)}" for key, item in config.items()) + "\n"
+
+
 def environment(base, pi_source=None):
     base = Path(base)
     config = base / "config/herdr"
@@ -61,7 +87,7 @@ def environment(base, pi_source=None):
     runtime = base / "runtime"
     runtime.mkdir(exist_ok=True, mode=0o700)
     path = config / "config.toml"
-    path.write_text('onboarding = false\n[session]\nresume_agents_on_restore = false\n[terminal]\ndefault_shell = "/bin/sh"\n')
+    path.write_text(herdr_config())
     env = dict(os.environ)
     for key in list(env):
         if key.startswith("HERDR_") or key in ("PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL", "PI_CODING_AGENT_SESSION_DIR"):

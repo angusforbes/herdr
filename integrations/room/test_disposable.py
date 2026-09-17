@@ -3,12 +3,46 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import tomllib
 from unittest.mock import patch
 
 import disposable
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_herdr_appearance_and_keys_copied_without_live_runtime_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "config.toml"
+            text = '''onboarding = true
+[theme]
+name = "terminal"
+[theme.custom]
+panel_bg = "black"
+[keys]
+prefix = "ctrl+space"
+next_agent = ["shift+down", "prefix+down"]
+[ui]
+sidebar_max_width = 44
+[ui.sidebar.agents]
+rows = [["state_icon", {token = "$topic", italic = true}], ["$model", "$name"]]
+[terminal]
+default_shell = "/live/shell"
+new_cwd = "follow"
+[session]
+resume_agents_on_restore = true
+[plugins]
+path = "/live/plugins"
+'''
+            source.write_text(text)
+            copied = tomllib.loads(disposable.herdr_config(source))
+            original = tomllib.loads(text)
+            for key in ("theme", "keys", "ui"):
+                self.assertEqual(copied[key], original[key])
+            self.assertEqual(copied["terminal"]["default_shell"], "/bin/sh")
+            self.assertFalse(copied["session"]["resume_agents_on_restore"])
+            self.assertNotIn("plugins", copied)
+            self.assertEqual(source.read_text(), text)
+
     def test_private_credentials_model_settings_and_only_two_local_hooks(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

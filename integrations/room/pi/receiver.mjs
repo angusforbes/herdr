@@ -10,11 +10,32 @@ export function sessionRef(ctx) {
 }
 const sameMember = (a, b) => a && b && ["pane_id", "terminal_id", "session"].every(k => a[k] === b[k]);
 
+// Register even when inactive. Factories only wire handlers, never open sockets.
+// Pi replaces this instance on /reload and session replacement; explicit opt-in
+// is not persisted. Startup env opt-in remains the disposable preview default.
+export function registerRoomLifecycle(pi, receiver) {
+  pi.registerCommand("room-enable", {
+    description: "Enable room questions for this Pi TUI (until reload/session replacement)",
+    handler: (_args, ctx) => receiver.enable(ctx),
+  });
+  pi.registerCommand("room-disable", {
+    description: "Stop this room receiver; uncertain deliveries are never retried",
+    handler: (_args, ctx) => receiver.disable(ctx),
+  });
+  pi.on("session_start", (_event, ctx) => receiver.start(ctx));
+  pi.on("session_shutdown", () => receiver.stop());
+  pi.on("ui_prompt_start", (_event, ctx) => receiver.modal(ctx, true));
+  pi.on("ui_prompt_end", (_event, ctx) => receiver.modal(ctx, false));
+  pi.on("agent_start", (_event, ctx) => receiver.started(ctx));
+  pi.on("agent_settled", (_event, ctx) => receiver.settled(ctx));
+}
+
 // Runtime inbox only: no transcript reads, stored offsets, replay, or automatic replies.
 export class RoomReceiver {
   constructor(pi, env, { call = socketCall, schedule = setTimeout, cancel = clearTimeout, now = Date.now } = {}) {
     this.pi = pi;
     this.env = { ...env };
+    this.enabled = env.HERDR_ROOM_ENABLED === "1";
     this.call = call;
     this.schedule = schedule;
     this.cancel = cancel;
@@ -45,9 +66,22 @@ export class RoomReceiver {
     return operation;
   }
   binding(g) { return { receiver_id: g.receiver.receiver_id, server_epoch: g.receiver.server_epoch }; }
+  async enable(ctx) {
+    // Explicit command opt-in is instance-local, never a process.env mutation.
+    // Repeating enable must not replace a possibly uncertain active generation.
+    if (ctx.mode !== "tui") throw new Error("Room enable requires the current Pi TUI");
+    if (this.run && this.valid(this.run, ctx)) return;
+    this.enabled = true;
+    await this.start(ctx);
+  }
+  disable(ctx) {
+    this.enabled = false;
+    this.stop();
+    if (ctx?.hasUI) ctx.ui.setStatus("herdr-room", "room: disabled");
+  }
   async start(ctx) {
     this.stop();
-    if (this.env.HERDR_ROOM_ENABLED !== "1") return;
+    if (!this.enabled) return;
     if (ctx.mode !== "tui" || !this.env.HERDR_SOCKET_PATH?.startsWith("/") || !string(this.env.HERDR_PANE_ID)) {
       if (ctx.hasUI) ctx.ui.notify("Room receiver unavailable: needs TUI and explicit Herdr pane/socket", "warning");
       return;
@@ -66,6 +100,8 @@ export class RoomReceiver {
     this.cancel(g.timer);
     g.abort.abort();
     this.run = undefined;
+    // A torn-down UI must never prevent resource/generation cancellation.
+    try { if (g.ctx.hasUI) g.ctx.ui.setStatus("herdr-room", undefined); } catch {}
     // An in-flight claim may already have reached the server. Do not replay it.
     // Receiver replacement/TTL makes abandoned work visible on the server.
   }
