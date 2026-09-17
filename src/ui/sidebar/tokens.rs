@@ -157,7 +157,8 @@ pub(super) fn agent_rows(
                             // Explicit config styling still wins.
                             let style = custom_token_style(&entry.tokens, name, style);
                             let (plain, rich) = parse_rich_markup(&value);
-                            let mut token = ResolvedToken::new(ResolvedTokenKind::Custom(plain), style);
+                            let mut token =
+                                ResolvedToken::new(ResolvedTokenKind::Custom(plain), style);
                             token.rich = rich;
                             return Some(token);
                         }
@@ -471,11 +472,17 @@ mod custom_style_tests {
             ..Default::default()
         };
         let style = custom_token_style(&tokens, "name", configured);
-        assert_eq!(style.fg.map(|c| c.ratatui()), Some(ratatui::style::Color::Rgb(0, 0, 0)));
+        assert_eq!(
+            style.fg.map(|c| c.ratatui()),
+            Some(ratatui::style::Color::Rgb(0, 0, 0))
+        );
         assert_eq!(style.bold, Some(false));
 
         tokens.insert("name_fg".to_string(), "orange".to_string());
-        assert_eq!(custom_token_style(&tokens, "name", SidebarTokenStyle::default()).fg, None);
+        assert_eq!(
+            custom_token_style(&tokens, "name", SidebarTokenStyle::default()).fg,
+            None
+        );
     }
 }
 
@@ -494,7 +501,10 @@ mod rich_markup_tests {
         let rich = rich.unwrap();
         assert_eq!(rich.len(), 3);
         assert_eq!(rich[0].text, "Sp");
-        assert_eq!(rich[0].fg.as_ref().map(rgb), Some(ratatui::style::Color::Rgb(255, 0, 0)));
+        assert_eq!(
+            rich[0].fg.as_ref().map(rgb),
+            Some(ratatui::style::Color::Rgb(255, 0, 0))
+        );
         assert_eq!(rich[1].text, "li");
         assert_eq!(rich[2].text, "ce");
         assert_eq!(rich[2].fg, None);

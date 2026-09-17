@@ -65,6 +65,9 @@ impl App {
         source_id: InputSourceId,
         key: TerminalKey,
     ) -> Option<PreparedPaneInput> {
+        if self.handle_panel_shortcut(&key) {
+            return None;
+        }
         let key_event = key.as_key_event();
         if self.try_copy_retained_selection(source_id, key.clone()) {
             return None;

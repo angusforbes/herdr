@@ -130,11 +130,17 @@ impl SearchPaneState {
     }
 
     fn invalidate(&mut self) {
+        // Invalidate both displayed results and ownership of any pending AI
+        // completion. An old reply must never populate a new query or mode.
+        self.ai_generation = self.ai_generation.wrapping_add(1);
+        self.ai_inflight = false;
+        self.ai_panes.clear();
+        self.groups.clear();
+        self.searched = None;
         self.selected = None;
+        self.scroll = 0;
         self.jump_highlight = None;
-        if self.searched.is_some() && !self.results_fresh() {
-            self.status = Some("enter to search".into());
-        }
+        self.status = (!self.query.trim().is_empty()).then(|| "enter to search".into());
     }
 }
 
@@ -145,7 +151,11 @@ impl SearchPaneState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BodyRow {
     Group(usize),
-    Hit { group: usize, hit: usize, flat: usize },
+    Hit {
+        group: usize,
+        hit: usize,
+        flat: usize,
+    },
     Gap,
 }
 
@@ -291,7 +301,8 @@ pub(crate) fn click_target(
 }
 
 fn row_index_of_flat(rows: &[BodyRow], flat: usize) -> Option<usize> {
-    rows.iter().position(|r| matches!(r, BodyRow::Hit { flat: f, .. } if *f == flat))
+    rows.iter()
+        .position(|r| matches!(r, BodyRow::Hit { flat: f, .. } if *f == flat))
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +403,7 @@ impl AppState {
 
     /// Keyword search over every agent pane's scrollback. Synchronous; a few ms.
     pub(crate) fn run_keyword_search(&mut self, terminal_runtimes: &TerminalRuntimeRegistry) {
+        self.search_pane.invalidate();
         let query = self.search_pane.query.trim().to_string();
         self.search_pane.selected = None;
         self.search_pane.scroll = 0;
@@ -446,8 +458,12 @@ impl AppState {
         let Some((group, hit)) = self.search_pane.hit(flat) else {
             return false;
         };
-        let (ws_idx, tab_idx, pane_id, row) =
-            (group.ws_idx, group.tab_idx, group.pane_id, hit.text_match.start.row);
+        let (ws_idx, tab_idx, pane_id, row) = (
+            group.ws_idx,
+            group.tab_idx,
+            group.pane_id,
+            hit.text_match.start.row,
+        );
         let text_match = hit.text_match;
         if !self.focus_navigator_target(NavigatorTarget::Pane {
             ws_idx,
@@ -457,7 +473,8 @@ impl AppState {
             self.search_pane.status = Some("that pane is gone".into());
             return false;
         }
-        if let Some(runtime) = self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id)
+        if let Some(runtime) =
+            self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id)
         {
             if let Some(metrics) = runtime.scroll_metrics() {
                 let desired_top = (row as usize).saturating_sub(metrics.viewport_rows / 4);
@@ -550,8 +567,27 @@ fn group_subtitle(entry: &AgentPanelEntry) -> String {
 // ---------------------------------------------------------------------------
 
 impl App {
+    pub(crate) fn cancel_ai_search(&mut self) {
+        if let Some(task) = self.search_ai_task.take() {
+            task.abort();
+        }
+        if self.state.search_pane.ai_inflight {
+            self.state.search_pane.invalidate();
+        }
+    }
+
+    pub(crate) fn switch_search_mode(&mut self, mode: SearchPaneMode) {
+        self.cancel_ai_search();
+        self.state.search_pane_set_mode(mode);
+        // Changing a mode must be immediate, not a synchronous scrollback scan
+        // or another model request. Enter explicitly submits the current query.
+    }
+
     /// Entry point from the mode dispatcher: the toggle keybind wins over text entry.
     pub(crate) fn handle_search_pane_terminal_key(&mut self, key: &crate::input::TerminalKey) {
+        if self.handle_panel_shortcut(key) {
+            return;
+        }
         if crate::app::input::terminal_direct_non_indexed_navigation_action(&self.state, key)
             == Some(crate::app::input::NavigateAction::SearchPane)
         {
@@ -569,26 +605,23 @@ impl App {
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Esc => self.state.leave_search_pane_focus(),
+            KeyCode::Esc => {
+                self.cancel_ai_search();
+                self.state.leave_search_pane_focus();
+            }
             KeyCode::Tab | KeyCode::BackTab => {
                 let next = self.state.search_pane.mode.toggled();
-                self.state.search_pane_set_mode(next);
-                if !self.state.search_pane.query.trim().is_empty() {
-                    self.run_search_pane_query();
-                }
+                self.switch_search_mode(next);
             }
             KeyCode::Enter => {
                 if self.state.search_pane.results_fresh() {
                     if let Some(flat) = self.state.search_pane.selected {
-                        self.state
-                            .jump_to_search_hit(&self.terminal_runtimes, flat);
+                        self.state.jump_to_search_hit(&self.terminal_runtimes, flat);
                         return;
                     }
                 }
                 self.run_search_pane_query();
             }
-            KeyCode::Up => self.state.move_search_pane_selection(-1),
-            KeyCode::Down => self.state.move_search_pane_selection(1),
             KeyCode::PageUp => self.state.scroll_search_pane(-5),
             KeyCode::PageDown => self.state.scroll_search_pane(5),
             KeyCode::Char('p') if ctrl => self.state.move_search_pane_selection(-1),
@@ -606,9 +639,14 @@ impl App {
             }
             _ => {}
         }
+        if !self.state.search_pane.ai_inflight {
+            // Typing/backspace invalidates the generation; also stop its child.
+            self.cancel_ai_search();
+        }
     }
 
     pub(crate) fn run_search_pane_query(&mut self) {
+        self.cancel_ai_search();
         match self.state.search_pane.mode {
             SearchPaneMode::Keyword => self.state.run_keyword_search(&self.terminal_runtimes),
             SearchPaneMode::Ai => self.start_ai_search(),
@@ -624,23 +662,19 @@ impl App {
                     SearchPaneMode::Keyword
                 };
                 self.state.focus_search_pane();
-                if self.state.search_pane_set_mode(mode)
-                    && !self.state.search_pane.query.trim().is_empty()
-                {
-                    self.run_search_pane_query();
-                }
+                self.switch_search_mode(mode);
             }
             SearchPaneClick::Input | SearchPaneClick::Background => {
                 self.state.focus_search_pane();
             }
             SearchPaneClick::Hit(flat) => {
-                self.state
-                    .jump_to_search_hit(&self.terminal_runtimes, flat);
+                self.state.jump_to_search_hit(&self.terminal_runtimes, flat);
             }
         }
     }
 
     fn start_ai_search(&mut self) {
+        self.state.search_pane.invalidate();
         let query = self.state.search_pane.query.trim().to_string();
         self.state.search_pane.selected = None;
         self.state.search_pane.scroll = 0;
@@ -671,7 +705,13 @@ impl App {
                 continue;
             }
             let text: String = if text.chars().count() > budget {
-                text.chars().rev().take(budget).collect::<Vec<_>>().into_iter().rev().collect()
+                text.chars()
+                    .rev()
+                    .take(budget)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect()
             } else {
                 text.to_string()
             };
@@ -702,23 +742,36 @@ impl App {
             return;
         }
 
-        self.state.search_pane.ai_generation += 1;
         let generation = self.state.search_pane.ai_generation;
         self.state.search_pane.ai_inflight = true;
         self.state.search_pane.ai_panes = panes;
         self.state.search_pane.groups.clear();
-            self.state.search_pane.jump_highlight = None;
-        self.state.search_pane.status = Some("thinking…".into());
+        self.state.search_pane.jump_highlight = None;
+        self.state.search_pane.status =
+            Some(format!("thinking… (Esc cancels; {AI_TIMEOUT_SECS}s limit)"));
         self.state.search_pane.searched = Some((query.clone(), SearchPaneMode::Ai));
 
         let prompt = build_ai_prompt(&query, &sections);
         let tx = self.event_tx.clone();
-        tokio::spawn(async move {
+        tracing::debug!(
+            generation,
+            prompt_bytes = prompt.len(),
+            panes = self.state.search_pane.ai_panes.len(),
+            "AI search started"
+        );
+        self.search_ai_task = Some(tokio::spawn(async move {
+            let started = std::time::Instant::now();
             let result = run_ai_command(prompt).await;
+            tracing::debug!(
+                generation,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                succeeded = result.is_ok(),
+                "AI search command finished"
+            );
             let _ = tx
                 .send(AppEvent::SearchPaneAiFinished { generation, result })
                 .await;
-        });
+        }));
     }
 
     pub(crate) fn handle_search_pane_ai_finished(
@@ -726,9 +779,14 @@ impl App {
         generation: u64,
         result: Result<String, String>,
     ) {
-        if generation != self.state.search_pane.ai_generation {
+        if generation != self.state.search_pane.ai_generation
+            || !self.state.search_pane.ai_inflight
+            || self.state.search_pane.mode != SearchPaneMode::Ai
+            || !self.state.search_pane.results_fresh()
+        {
             return;
         }
+        self.search_ai_task.take();
         self.state.search_pane.ai_inflight = false;
         let output = match result {
             Ok(output) => output,
@@ -746,7 +804,11 @@ impl App {
         };
         let panes = self.state.search_pane.ai_panes.clone();
         let mut groups = Vec::new();
+        let mut seen_panes = std::collections::HashSet::new();
         for pick in picks {
+            if !seen_panes.insert(pick.pane) {
+                continue;
+            }
             let Some(pane) = pick.pane.checked_sub(1).and_then(|i| panes.get(i)) else {
                 continue;
             };
@@ -757,32 +819,35 @@ impl App {
             ) else {
                 continue;
             };
+            // The model sees only recent rows. Resolve at most three quotes
+            // from one bounded snapshot, not repeated full-history extractions.
+            let candidates: Vec<Vec<String>> = pick
+                .quotes
+                .into_iter()
+                .map(|quote| collapse_ws(&quote))
+                .filter(|quote| !quote.is_empty())
+                .take(MAX_HITS_PER_PANE)
+                .map(|quote| {
+                    let mut alternatives = vec![
+                        quote.clone(),
+                        first_words(&quote, 5),
+                        first_words(&quote, 3),
+                    ];
+                    alternatives.retain(|needle| needle.chars().count() >= 3);
+                    alternatives.dedup();
+                    alternatives
+                })
+                .collect();
+            let found = runtime.find_recent_text_quotes(&candidates, AI_LINES_PER_PANE);
             let mut hits: Vec<SearchHit> = Vec::new();
-            for quote in pick.quotes {
-                let quote = collapse_ws(&quote);
-                if quote.is_empty() {
-                    continue;
-                }
-                // Exact quote first; if the model paraphrased, fall back to its first words.
-                let candidates = [quote.clone(), first_words(&quote, 5), first_words(&quote, 3)];
-                let found = candidates.iter().find_map(|needle| {
-                    if needle.chars().count() < 3 {
-                        return None;
-                    }
-                    let mut found = runtime.search_text_matches_with_lines(needle, false);
-                    found.sort_by_key(|(m, _)| (m.start.row, m.start.col));
-                    found.pop().map(|(m, line)| make_hit(m, &line, needle))
-                });
-                if let Some(hit) = found {
+            for (alternatives, hit) in candidates.iter().zip(found) {
+                if let Some((index, text_match, line)) = hit {
                     if !hits
                         .iter()
-                        .any(|h| h.text_match.start.row == hit.text_match.start.row)
+                        .any(|hit| hit.text_match.start.row == text_match.start.row)
                     {
-                        hits.push(hit);
+                        hits.push(make_hit(text_match, &line, &alternatives[index]));
                     }
-                }
-                if hits.len() >= MAX_HITS_PER_PANE {
-                    break;
                 }
             }
             if hits.is_empty() {
@@ -803,7 +868,11 @@ impl App {
         self.state.search_pane.status = Some(if groups.is_empty() {
             "AI found nothing relevant".into()
         } else {
-            format!("AI: {total} in {} agent{}", groups.len(), plural(groups.len()))
+            format!(
+                "AI: {total} in {} agent{}",
+                groups.len(),
+                plural(groups.len())
+            )
         });
         self.state.search_pane.groups = groups;
         self.state.search_pane.scroll = 0;
@@ -811,7 +880,10 @@ impl App {
 }
 
 fn first_words(text: &str, n: usize) -> String {
-    text.split_whitespace().take(n).collect::<Vec<_>>().join(" ")
+    text.split_whitespace()
+        .take(n)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -857,8 +929,6 @@ fn parse_ai_output(output: &str) -> Result<Vec<AiPick>, String> {
 /// prompt on stdin and printing JSON) overrides the default `pi -p` call;
 /// `HERDR_SEARCH_AI_MODEL` picks the pi model (default claude-haiku-4-5).
 async fn run_ai_command(prompt: String) -> Result<String, String> {
-    use tokio::io::AsyncWriteExt;
-    let timeout = std::time::Duration::from_secs(AI_TIMEOUT_SECS);
     let mut command = if let Ok(custom) = std::env::var("HERDR_SEARCH_AI_COMMAND") {
         let mut c = tokio::process::Command::new("sh");
         c.arg("-c").arg(custom);
@@ -884,32 +954,43 @@ async fn run_ai_command(prompt: String) -> Result<String, String> {
         ]);
         c
     };
-    // Prompt on stdin; a lone "-" is not universally supported, so pass it as the last arg
-    // for pi and via stdin for custom commands.
-    let custom = std::env::var("HERDR_SEARCH_AI_COMMAND").is_ok();
-    if !custom {
-        command.arg(&prompt);
-    }
     command
         .env_remove("HERDR_ENV")
         .env_remove("HERDR_PANE_ID")
-        .env_remove("HERDR_SOCKET_PATH")
+        .env_remove("HERDR_SOCKET_PATH");
+    // Print-mode pi and custom commands both read stdin. Never put collected
+    // scrollback in argv: Linux limits a single argument to about 128 KiB.
+    run_ai_process(
+        command,
+        prompt,
+        std::time::Duration::from_secs(AI_TIMEOUT_SECS),
+    )
+    .await
+}
+
+async fn run_ai_process(
+    mut command: tokio::process::Command,
+    prompt: String,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    use tokio::io::AsyncWriteExt;
+    command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     let mut child = command.spawn().map_err(|e| format!("spawn: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let payload = if custom { prompt.clone() } else { String::new() };
-        tokio::spawn(async move {
-            let _ = stdin.write_all(payload.as_bytes()).await;
-            let _ = stdin.shutdown().await;
-        });
-    }
-    let output = tokio::time::timeout(timeout, child.wait_with_output())
-        .await
-        .map_err(|_| format!("timed out after {AI_TIMEOUT_SECS}s"))?
-        .map_err(|e| e.to_string())?;
+    let mut stdin = child.stdin.take().ok_or("AI command stdin unavailable")?;
+    // Drain output while writing the prompt; neither side may block the other
+    // on a full pipe. Dropping stdin supplies EOF, including for empty prompts.
+    let (output, write_result) = tokio::time::timeout(timeout, async move {
+        tokio::join!(child.wait_with_output(), async move {
+            stdin.write_all(prompt.as_bytes()).await
+        })
+    })
+    .await
+    .map_err(|_| format!("timed out after {}s", timeout.as_secs()))?;
+    let output = output.map_err(|e| e.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let line = stderr.lines().last().unwrap_or("").trim();
@@ -919,6 +1000,7 @@ async fn run_ai_command(prompt: String) -> Result<String, String> {
             line.chars().take(120).collect()
         });
     }
+    write_result.map_err(|e| format!("writing AI prompt: {e}"))?;
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
@@ -937,6 +1019,49 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ai_process_streams_large_prompt_over_stdin_without_argv_or_pipe_deadlock() {
+        let mut command = tokio::process::Command::new("sh");
+        // Emit more than a pipe buffer before reading; receiving a full prompt
+        // requires concurrent draining. No model/API request in this test.
+        command.args([
+            "-c",
+            "test \"$#\" -eq 0 || exit 9; head -c 131072 /dev/zero; wc -c",
+        ]);
+        let prompt = "noise λ\n".repeat(40_000);
+        let size = prompt.len();
+        let output = run_ai_process(command, prompt, std::time::Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(output[131072..].trim(), size.to_string());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ai_process_preserves_errors_and_times_out_stalled_input() {
+        let mut command = tokio::process::Command::new("sh");
+        command.args(["-c", "echo bad-model >&2; exit 2"]);
+        let error = run_ai_process(
+            command,
+            "x".repeat(200_000),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "bad-model");
+        let mut command = tokio::process::Command::new("sh");
+        command.args(["-c", "exec sleep 10"]);
+        let error = run_ai_process(
+            command,
+            "x".repeat(200_000),
+            std::time::Duration::from_millis(50),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.starts_with("timed out"));
+    }
+
     #[test]
     fn recent_hits_keeps_last_three_rows_newest_first() {
         let found = (0..6u32).map(|r| (m(r), format!("line {r} foo"))).collect();
@@ -949,7 +1074,11 @@ mod tests {
 
     #[test]
     fn recent_hits_dedupes_same_row() {
-        let found = vec![(m(2), "a foo foo".into()), (m(2), "a foo foo".into()), (m(1), "foo".into())];
+        let found = vec![
+            (m(2), "a foo foo".into()),
+            (m(2), "a foo foo".into()),
+            (m(1), "foo".into()),
+        ];
         assert_eq!(recent_hits(found, "foo").len(), 2);
     }
 
@@ -963,9 +1092,7 @@ mod tests {
             title: String::new(),
             subtitle: String::new(),
             tokens: Default::default(),
-            hits: (0..n)
-                .map(|r| make_hit(m(r as u32), "x", "x"))
-                .collect(),
+            hits: (0..n).map(|r| make_hit(m(r as u32), "x", "x")).collect(),
         };
         state.groups = vec![group(2), group(1)];
         let rows = body_rows(&state);
@@ -1000,13 +1127,28 @@ mod tests {
         }];
         let rect = Rect::new(100, 0, 40, 20);
         assert_eq!(click_target(&state, rect, 99, 5), None);
-        assert_eq!(click_target(&state, rect, 105, 1), Some(SearchPaneClick::Input));
+        assert_eq!(
+            click_target(&state, rect, 105, 1),
+            Some(SearchPaneClick::Input)
+        );
         let (kw, ai) = mode_chip_rects(rect);
-        assert_eq!(click_target(&state, rect, kw.x, 0), Some(SearchPaneClick::ModeKeyword));
-        assert_eq!(click_target(&state, rect, ai.x, 0), Some(SearchPaneClick::ModeAi));
+        assert_eq!(
+            click_target(&state, rect, kw.x, 0),
+            Some(SearchPaneClick::ModeKeyword)
+        );
+        assert_eq!(
+            click_target(&state, rect, ai.x, 0),
+            Some(SearchPaneClick::ModeAi)
+        );
         // body row 0 = Group header, row 1 = first hit
-        assert_eq!(click_target(&state, rect, 105, HEADER_ROWS), Some(SearchPaneClick::Background));
-        assert_eq!(click_target(&state, rect, 105, HEADER_ROWS + 1), Some(SearchPaneClick::Hit(0)));
+        assert_eq!(
+            click_target(&state, rect, 105, HEADER_ROWS),
+            Some(SearchPaneClick::Background)
+        );
+        assert_eq!(
+            click_target(&state, rect, 105, HEADER_ROWS + 1),
+            Some(SearchPaneClick::Hit(0))
+        );
     }
 }
 
@@ -1058,6 +1200,13 @@ mod app_tests {
         app.handle_search_pane_terminal_key(&TerminalKey::new(code, KeyModifiers::empty()));
     }
 
+    fn select_next(app: &mut App) {
+        app.handle_search_pane_terminal_key(&TerminalKey::new(
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        ));
+    }
+
     #[tokio::test]
     async fn toggle_opens_focuses_and_hides_keeping_query() {
         let (mut app, _) = app_with_scrollback(b"alpha\r\n");
@@ -1078,7 +1227,13 @@ mod app_tests {
     async fn keyword_search_groups_recent_hits_and_enter_jumps() {
         let mut bytes = Vec::new();
         for i in 0..40 {
-            bytes.extend_from_slice(format!("line {i} {}\r\n", if i % 10 == 0 { "needle" } else { "hay" }).as_bytes());
+            bytes.extend_from_slice(
+                format!(
+                    "line {i} {}\r\n",
+                    if i % 10 == 0 { "needle" } else { "hay" }
+                )
+                .as_bytes(),
+            );
         }
         let (mut app, pane_id) = app_with_scrollback(&bytes);
         app.state.toggle_search_pane();
@@ -1088,21 +1243,36 @@ mod app_tests {
         let sp = &app.state.search_pane;
         assert_eq!(sp.groups.len(), 1);
         assert_eq!(sp.groups[0].pane_id, pane_id);
-        assert_eq!(sp.groups[0].hits.len(), MAX_HITS_PER_PANE, "capped at 3 of the 4 matches");
-        let rows: Vec<u32> = sp.groups[0].hits.iter().map(|h| h.text_match.start.row).collect();
-        assert!(rows.windows(2).all(|w| w[0] > w[1]), "newest first: {rows:?}");
+        assert_eq!(
+            sp.groups[0].hits.len(),
+            MAX_HITS_PER_PANE,
+            "capped at 3 of the 4 matches"
+        );
+        let rows: Vec<u32> = sp.groups[0]
+            .hits
+            .iter()
+            .map(|h| h.text_match.start.row)
+            .collect();
+        assert!(
+            rows.windows(2).all(|w| w[0] > w[1]),
+            "newest first: {rows:?}"
+        );
         assert!(sp.groups[0].hits[0].snippet.contains("line 30 needle"));
         assert!(sp.results_fresh());
 
-        // Down selects the newest hit; Enter jumps: pane focused, scrolled so the row is visible.
-        press(&mut app, KeyCode::Down);
+        // Ctrl+N selects; Enter jumps. Plain arrows are routed to the terminal.
+        select_next(&mut app);
         assert_eq!(app.state.search_pane.selected, Some(0));
         let target_row = rows[2] as usize; // oldest of the three: needs a real scroll
-        press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Down);
+        select_next(&mut app);
+        select_next(&mut app);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.state.mode, Mode::Terminal);
-        let jump = app.state.search_pane.jump_highlight.expect("jump highlight set");
+        let jump = app
+            .state
+            .search_pane
+            .jump_highlight
+            .expect("jump highlight set");
         assert_eq!(jump.pane_id, pane_id);
         assert_eq!(jump.text_match.start.row as usize, target_row);
         let metrics = app
@@ -1119,12 +1289,290 @@ mod app_tests {
     }
 
     #[tokio::test]
+    async fn global_search_shortcuts_visit_results_without_stealing_query_focus() {
+        let (mut app, pane_id) = app_with_scrollback(b"foo one\r\nfoo two\r\nfoo three\r\n");
+        app.state.toggle_search_pane();
+        type_text(&mut app, "foo");
+        press(&mut app, KeyCode::Enter);
+        let modifiers = KeyModifiers::CONTROL;
+        for (focus, agents) in [
+            (Mode::Terminal, false),
+            (Mode::Navigate, false),
+            (Mode::Navigate, true),
+            (Mode::SearchPane, false),
+        ] {
+            app.state.mode = focus;
+            app.state.navigate_agents = agents;
+            app.state.search_pane.selected = None;
+            for expected in [0, 1, 2, 0] {
+                let key = TerminalKey::new(KeyCode::Down, modifiers);
+                app.route_client_events(
+                    vec![
+                        crate::raw_input::RawInputEvent::Key(key.clone()),
+                        crate::raw_input::RawInputEvent::Key(
+                            key.with_kind(crossterm::event::KeyEventKind::Release),
+                        ),
+                    ],
+                    false,
+                );
+                assert_eq!(app.state.search_pane.selected, Some(expected));
+                assert_eq!((app.state.mode, app.state.navigate_agents), (focus, agents));
+                let jump = app.state.search_pane.jump_highlight.as_ref().unwrap();
+                assert_eq!(jump.pane_id, pane_id);
+                assert_eq!(
+                    jump.text_match,
+                    app.state.search_pane.groups[0].hits[expected].text_match
+                );
+            }
+        }
+        app.state.mode = Mode::Terminal;
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::Up, modifiers));
+        assert_eq!(app.state.search_pane.selected, Some(2));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        app.handle_terminal_key_headless(TerminalKey::new(
+            KeyCode::Char('\''),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(app.state.mode, Mode::SearchPane);
+        assert_eq!(app.state.search_pane.selected, None);
+        assert_eq!(app.state.search_pane.query, "foo");
+        app.state.search_pane_insert_text(" missing");
+        app.handle_search_pane_terminal_key(&TerminalKey::new(KeyCode::Down, modifiers));
+        assert_eq!(
+            app.state.search_pane.selected, None,
+            "stale results cannot be visited"
+        );
+    }
+
+    #[tokio::test]
+    async fn keyword_results_cannot_be_replaced_by_late_ai_reply() {
+        let (mut app, pane_id) = app_with_scrollback(b"noise from fan\r\nbananas are yellow\r\n");
+        app.state.toggle_search_pane();
+        type_text(&mut app, "noise");
+        // Model an in-flight AI request without invoking any external service.
+        app.state.search_pane.mode = SearchPaneMode::Ai;
+        app.state.search_pane.searched = Some(("noise".into(), SearchPaneMode::Ai));
+        app.state.search_pane.ai_generation = 7;
+        app.state.search_pane.ai_inflight = true;
+        app.state.search_pane.ai_panes = vec![AiPaneRef {
+            ws_idx: 0,
+            tab_idx: 0,
+            pane_id,
+            title: "test".into(),
+            subtitle: String::new(),
+            tokens: Default::default(),
+        }];
+        app.state.search_pane_set_mode(SearchPaneMode::Keyword);
+        app.run_search_pane_query();
+        let expected = app.state.search_pane.groups.clone();
+        assert_eq!(expected[0].hits[0].snippet, "noise from fan");
+        app.handle_search_pane_ai_finished(
+            7,
+            Ok(r#"[{"pane":1,"quotes":["bananas are yellow"]}]"#.into()),
+        );
+        assert_eq!(
+            app.state.search_pane.groups, expected,
+            "late AI reply must not replace literal keyword results"
+        );
+        assert!(!app.state.search_pane.ai_inflight);
+    }
+
+    #[tokio::test]
+    async fn ai_completion_requires_current_request_even_after_query_is_restored() {
+        let (mut app, pane_id) = app_with_scrollback(b"noise from fan\r\n");
+        app.state.toggle_search_pane();
+        type_text(&mut app, "noise");
+        app.state.search_pane.mode = SearchPaneMode::Ai;
+        app.state.search_pane.searched = Some(("noise".into(), SearchPaneMode::Ai));
+        app.state.search_pane.ai_inflight = true;
+        app.state.search_pane.ai_panes = vec![AiPaneRef {
+            ws_idx: 0,
+            tab_idx: 0,
+            pane_id,
+            title: "test".into(),
+            subtitle: String::new(),
+            tokens: Default::default(),
+        }];
+        let generation = app.state.search_pane.ai_generation;
+        app.handle_search_pane_ai_finished(
+            generation,
+            Ok(r#"[{"pane":1,"quotes":["noise from fan"]}]"#.into()),
+        );
+        assert_eq!(
+            app.state.search_pane.hit_count(),
+            1,
+            "current AI completion still works"
+        );
+        assert!(!app.state.search_pane.ai_inflight);
+
+        // Simulate another request, edit away and back, then deliver its reply.
+        app.state.search_pane.ai_inflight = true;
+        type_text(&mut app, "x");
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(app.state.search_pane.query, "noise");
+        assert!(app.state.search_pane.groups.is_empty());
+        let status = app.state.search_pane.status.clone();
+        app.handle_search_pane_ai_finished(generation, Err("old failure".into()));
+        assert_eq!(app.state.search_pane.status, status);
+        app.handle_search_pane_ai_finished(
+            generation,
+            Ok(r#"[{"pane":1,"quotes":["noise from fan"]}]"#.into()),
+        );
+        assert!(app.state.search_pane.groups.is_empty());
+        assert!(!app.state.search_pane.ai_inflight);
+    }
+
+    #[tokio::test]
+    async fn editing_keyword_clears_snippets_from_previous_query() {
+        let (mut app, _) = app_with_scrollback(b"bananas are yellow\r\nnoise from fan\r\n");
+        app.state.toggle_search_pane();
+        type_text(&mut app, "bananas");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.state.search_pane.hit_count(), 1);
+        app.handle_search_pane_terminal_key(&TerminalKey::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        ));
+        type_text(&mut app, "noise");
+        assert_eq!(
+            app.state.search_pane.hit_count(),
+            0,
+            "old snippets must not appear under the new query"
+        );
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.state.search_pane.groups[0].hits[0].snippet,
+            "noise from fan"
+        );
+    }
+
+    #[tokio::test]
+    async fn ai_quote_lookup_is_bounded_and_keeps_absolute_row_coordinates() {
+        let mut bytes = b"ancient needle\r\n".to_vec();
+        for _ in 0..300 {
+            bytes.extend_from_slice(b"filler\r\n");
+        }
+        bytes.extend_from_slice(b"recent needle\r\n");
+        let (app, pane_id) = app_with_scrollback(&bytes);
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .unwrap();
+        let matches = runtime.find_recent_text_quotes(
+            &[
+                vec!["ancient needle".into()],
+                vec!["not present".into(), "recent needle".into()],
+            ],
+            10,
+        );
+        assert!(
+            matches[0].is_none(),
+            "old history is outside bounded AI context"
+        );
+        let (candidate, hit, line) = matches[1].as_ref().unwrap();
+        assert_eq!(*candidate, 1);
+        assert_eq!(line, "recent needle");
+        assert!(
+            hit.start.row >= 300,
+            "coordinates must not be window-relative"
+        );
+        assert!(runtime.text_match_is_current(*hit));
+    }
+
+    #[tokio::test]
+    async fn switching_away_from_thinking_cancels_task_without_running_keyword_search() {
+        let (mut app, _) = app_with_scrollback(b"noise from fan\r\n");
+        app.state.toggle_search_pane();
+        type_text(&mut app, "noise");
+        app.state.search_pane.mode = SearchPaneMode::Ai;
+        app.state.search_pane.searched = Some(("noise".into(), SearchPaneMode::Ai));
+        app.state.search_pane.ai_inflight = true;
+        app.state.search_pane.status = Some("thinking…".into());
+        let task = tokio::spawn(std::future::pending::<()>());
+        let abort = task.abort_handle();
+        app.search_ai_task = Some(task);
+        app.handle_search_pane_terminal_key(&TerminalKey::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(app.state.search_pane.mode, SearchPaneMode::Keyword);
+        assert_eq!(app.state.mode, Mode::SearchPane);
+        assert_eq!(app.state.search_pane.query, "noise");
+        assert_eq!(
+            app.state.search_pane.status.as_deref(),
+            Some("enter to search")
+        );
+        assert!(
+            app.state.search_pane.searched.is_none(),
+            "switch must not scan scrollback"
+        );
+        assert!(!app.state.search_pane.ai_inflight);
+        assert!(app.search_ai_task.is_none());
+        tokio::task::yield_now().await;
+        assert!(abort.is_finished());
+        // Switching back also waits for Enter instead of launching another AI.
+        app.handle_search_pane_terminal_key(&TerminalKey::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(app.state.search_pane.mode, SearchPaneMode::Ai);
+        assert!(app.search_ai_task.is_none());
+        assert!(!app.state.search_pane.ai_inflight);
+    }
+
+    #[tokio::test]
+    async fn editing_hiding_and_escape_cancel_pending_ai_search() {
+        for action in ["edit", "hide", "escape", "paste"] {
+            let (mut app, _) = app_with_scrollback(b"noise\r\n");
+            app.state.toggle_search_pane();
+            app.state.search_pane.mode = SearchPaneMode::Ai;
+            app.state.search_pane.ai_inflight = true;
+            let task = tokio::spawn(std::future::pending::<()>());
+            let abort = task.abort_handle();
+            app.search_ai_task = Some(task);
+            match action {
+                "edit" => type_text(&mut app, "x"),
+                "hide" => app.handle_search_pane_terminal_key(&TerminalKey::new(
+                    KeyCode::Char('s'),
+                    KeyModifiers::CONTROL,
+                )),
+                "escape" => press(&mut app, KeyCode::Esc),
+                _ => {
+                    app.paste_into_active_text_input("pasted");
+                }
+            }
+            assert!(app.search_ai_task.is_none(), "{action}");
+            assert!(!app.state.search_pane.ai_inflight, "{action}");
+            tokio::task::yield_now().await;
+            assert!(abort.is_finished());
+        }
+    }
+
+    #[tokio::test]
+    async fn global_search_mode_shortcut_decodes_slash_and_preserves_focus() {
+        let (mut app, _) = app_with_scrollback(b"foo\r\n");
+        app.state.search_pane.visible = true;
+        // Empty query prevents spawning an AI process during this test.
+        app.route_client_input(b"\x1b[47;5u\x1b[47;5:3u".to_vec());
+        assert_eq!(app.state.search_pane.mode, SearchPaneMode::Ai);
+        assert_eq!(app.state.mode, Mode::Terminal);
+        app.route_client_input(b"\x1b[39;5u\x1b[39;5:3u".to_vec());
+        assert_eq!(app.state.mode, Mode::SearchPane);
+        app.route_client_input(b"\x1b[47;5u\x1b[47;5:3u".to_vec());
+        assert_eq!(app.state.search_pane.mode, SearchPaneMode::Keyword);
+        assert_eq!(app.state.mode, Mode::SearchPane);
+        // Plain Tab retains its established Keyword/AI behavior.
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.state.search_pane.mode, SearchPaneMode::Ai);
+    }
+
+    #[tokio::test]
     async fn editing_query_invalidates_results_and_enter_searches_again() {
         let (mut app, _) = app_with_scrollback(b"foo\r\nbar\r\n");
         app.state.toggle_search_pane();
         type_text(&mut app, "foo");
         press(&mut app, KeyCode::Enter);
-        press(&mut app, KeyCode::Down);
+        select_next(&mut app);
         assert_eq!(app.state.search_pane.hit_count(), 1);
         press(&mut app, KeyCode::Backspace);
         assert!(!app.state.search_pane.results_fresh());

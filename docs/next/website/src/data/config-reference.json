@@ -314,6 +314,42 @@
           "description": "Toggle the right-hand search pane (keyword / AI search across agent panes)."
         },
         {
+          "key": "keys.focus_panel_next",
+          "type": "keybinding",
+          "default": "\"ctrl+tab\"",
+          "description": "Cycle focus forward through Spaces, Agents, terminal, and Search (only if open)."
+        },
+        {
+          "key": "keys.focus_panel_previous",
+          "type": "keybinding",
+          "default": "\"ctrl+shift+tab\"",
+          "description": "Cycle panel focus backward through Spaces, Agents, terminal, and Search (only if open)."
+        },
+        {
+          "key": "keys.search_result_previous",
+          "type": "keybinding",
+          "default": "\"ctrl+up\"",
+          "description": "Select the previous search result. Only active while search is open, in normal modes."
+        },
+        {
+          "key": "keys.search_result_next",
+          "type": "keybinding",
+          "default": "\"ctrl+down\"",
+          "description": "Select the next search result. Only active while search is open, in normal modes."
+        },
+        {
+          "key": "keys.search_input",
+          "type": "keybinding",
+          "default": "\"ctrl+'\"",
+          "description": "Focus the search query. Only active while search is open, in normal modes."
+        },
+        {
+          "key": "keys.search_mode",
+          "type": "keybinding",
+          "default": "\"ctrl+/\"",
+          "description": "Switch keyword / AI search mode. Only active while search is open, in normal modes."
+        },
+        {
           "key": "keys.navigate_workspace_up",
           "type": "keybinding",
           "default": "\"up\"",

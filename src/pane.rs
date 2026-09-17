@@ -2671,7 +2671,16 @@ impl PaneRuntime {
         query: &str,
         case_sensitive: bool,
     ) -> Vec<(crate::pane::TerminalTextMatch, String)> {
-        self.terminal.search_text_matches_with_lines(query, case_sensitive)
+        self.terminal
+            .search_text_matches_with_lines(query, case_sensitive)
+    }
+
+    pub(crate) fn find_recent_text_quotes(
+        &self,
+        quotes: &[Vec<String>],
+        max_rows: usize,
+    ) -> Vec<Option<(usize, crate::pane::TerminalTextMatch, String)>> {
+        self.terminal.find_recent_text_quotes(quotes, max_rows)
     }
 
     pub(crate) fn text_match_is_current(&self, text_match: crate::pane::TerminalTextMatch) -> bool {

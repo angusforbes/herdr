@@ -132,6 +132,12 @@ A small keybinding override looks like this:
 prefix = "ctrl+b"
 goto = "prefix+g"
 search_pane = "ctrl+s"
+focus_panel_next = "ctrl+tab"
+focus_panel_previous = "ctrl+shift+tab"
+search_result_previous = "ctrl+up"
+search_result_next = "ctrl+down"
+search_input = "ctrl+'"
+search_mode = "ctrl+/"
 new_tab = "prefix+c"
 next_tab = "prefix+n"
 previous_tab = "prefix+p"
@@ -142,6 +148,10 @@ split_horizontal = "prefix+minus"
 ```
 
 The default keymap is prefix-first so Herdr does not steal input from shells, editors, tmux, or terminal apps. Search `keys.` in the [Config reference](/docs/config-reference/) to see every action and default binding. The in-app help panel at `prefix+?` shows the active bindings.
+
+`focus_panel_next` and `focus_panel_previous` cycle focus forward or backward through Spaces → Agents → terminal → Search, including Search only when it is open. The four search navigation shortcuts work only while search is open, in normal modes (not dialogs or other modal input): `search_result_previous` / `search_result_next` select and visit results while retaining keyboard focus, `search_input` focuses the query (so Enter submits it), and `search_mode` switches keyword / AI search. They do not open Search; use `search_pane` for that.
+
+These direct shortcuts require a terminal that reports the corresponding modified keys distinctly; remap them if your terminal intercepts or conflates them.
 
 A binding may also be an array when one action needs multiple shortcuts:
 

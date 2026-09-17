@@ -58,6 +58,9 @@ impl App {
     }
 
     pub(crate) fn handle_prefix_key(&mut self, raw_key: TerminalKey) {
+        if self.handle_panel_shortcut(&raw_key) {
+            return;
+        }
         let key = raw_key.as_key_event();
         self.state.update_dismissed = true;
 
@@ -125,12 +128,47 @@ impl App {
     }
 
     pub(crate) fn handle_navigate_key(&mut self, raw_key: TerminalKey) {
+        if self.handle_panel_shortcut(&raw_key) {
+            return;
+        }
         let key = raw_key.as_key_event();
         self.state.update_dismissed = true;
 
         if key.code == KeyCode::Esc || self.state.is_prefix_key(&raw_key) {
             leave_navigate_mode(&mut self.state);
             return;
+        }
+
+        if self.state.navigate_agents {
+            let action = if self
+                .state
+                .keybinds
+                .navigate
+                .workspace_up
+                .matches_direct_key(&raw_key)
+            {
+                Some(NavigateAction::PreviousAgent)
+            } else if self
+                .state
+                .keybinds
+                .navigate
+                .workspace_down
+                .matches_direct_key(&raw_key)
+            {
+                Some(NavigateAction::NextAgent)
+            } else {
+                None
+            };
+            if let Some(action) = action {
+                self.execute_tui_navigate_action(action, ActionContext::Navigate);
+                self.state.mode = Mode::Navigate;
+                self.state.navigate_agents = true;
+                return;
+            }
+            if key.code == KeyCode::Enter && key.modifiers.is_empty() {
+                leave_navigate_mode(&mut self.state);
+                return;
+            }
         }
 
         if self
@@ -257,6 +295,7 @@ impl App {
                 }
             }
             NavigateAction::WorkspacePicker => {
+                self.state.navigate_agents = false;
                 self.state.mobile_switcher_scroll = 0;
                 self.state.mode = Mode::Navigate;
             }
@@ -1945,6 +1984,7 @@ fn move_active_tab_relative(state: &mut AppState, delta: isize) {
 }
 
 fn leave_navigate_mode(state: &mut AppState) {
+    state.navigate_agents = false;
     if state.active.is_some() {
         state.mode = Mode::Terminal;
     }

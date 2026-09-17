@@ -16,7 +16,12 @@ fn prefix_rhs_label(bindings: &crate::config::ActionKeybinds) -> String {
 }
 
 fn keybind_label(bindings: &crate::config::ActionKeybinds) -> String {
-    bindings.label().unwrap_or_else(|| "unset".to_string())
+    bindings
+        .bindings
+        .iter()
+        .find(|binding| binding.trigger.is_direct())
+        .map(|binding| binding.label.clone())
+        .unwrap_or_else(|| prefix_rhs_label(bindings))
 }
 
 fn render_bottom_bar(frame: &mut Frame, area: Rect, line: Line<'_>, bg: ratatui::style::Color) {
@@ -149,18 +154,28 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
     let settings = prefix_rhs_label(&kb.settings);
     let goto = prefix_rhs_label(&kb.goto);
     let detach = prefix_rhs_label(&kb.detach);
-    let workspace_nav = format!(
-        "{} / {}",
-        keybind_label(&kb.navigate.workspace_up),
-        keybind_label(&kb.navigate.workspace_down)
-    );
+    let (previous, next) = if app.navigate_agents {
+        (&kb.previous_agent, &kb.next_agent)
+    } else {
+        (&kb.previous_workspace, &kb.next_workspace)
+    };
+    let workspace_nav = format!("{} / {}", keybind_label(previous), keybind_label(next));
     let line = Line::from(vec![
         Span::styled(" NAVIGATE ", mode_style),
         Span::raw(" "),
         Span::styled("esc", key),
         Span::styled(" back  ", dim),
+        Span::styled("↑/↓", key),
+        Span::styled(" terminal  ", dim),
         Span::styled(workspace_nav, key),
-        Span::styled(" ws  ", dim),
+        Span::styled(
+            if app.navigate_agents {
+                " agents  "
+            } else {
+                " spaces  "
+            },
+            dim,
+        ),
         Span::styled("⇥", key),
         Span::styled(" pane  ", dim),
         Span::styled(goto, key),

@@ -759,18 +759,60 @@ pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {
     Ok(0)
 }
 
+/// Append a per-call unique suffix to a CLI request id.
+///
+/// CLI request ids are compile-time literals naming the command
+/// (`"cli:agent:prompt"`), so every invocation of a command shares one id. That
+/// makes concurrent requests impossible to tell apart in the server log: a
+/// `start` and a `complete` cannot be paired, and two injections of the same
+/// payload into the same pane are indistinguishable from one another. Since the
+/// id round-trips to the response, stamping it here gives every call a
+/// correlation handle.
+///
+/// The literal prefix is preserved, so `starts_with("cli:agent:prompt")` keeps
+/// working for anything matching on the command name.
+fn unique_request(request: &Request) -> Request {
+    Request {
+        id: format!("{}:{}", request.id, next_request_nonce()),
+        method: request.method.clone(),
+    }
+}
+
+/// Monotonic, process-unique suffix.
+///
+/// A process-local counter alone would collide across the concurrent `herdr`
+/// processes that separate agents run, so the start time is mixed in to keep
+/// ids distinct between processes as well as within one.
+fn next_request_nonce() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    static PROCESS_SALT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+    let salt = *PROCESS_SALT.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.subsec_nanos() as u64)
+            .unwrap_or(0);
+        nanos ^ ((std::process::id() as u64) << 32)
+    });
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{salt:011x}{seq:x}")
+}
+
 pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {
+    let request = unique_request(request);
     let client = ApiClient::local();
     ensure_server_protocol_compatible(&client, &request.id)?;
     client
-        .request_value(request)
+        .request_value(&request)
         .map_err(|err| map_server_not_running_or_io(err, &request.id, &client))
 }
 
 pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {
+    let request = unique_request(request);
     let client = ApiClient::local();
     client
-        .request_value(request)
+        .request_value(&request)
         .map_err(|err| map_server_not_running_or_io(err, &request.id, &client))
 }
 

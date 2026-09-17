@@ -52,7 +52,13 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
             title,
         );
         let (kw, ai) = mode_chip_rects(area);
-        render_chip(frame, kw, KEYWORD_CHIP, state.mode == SearchPaneMode::Keyword, p);
+        render_chip(
+            frame,
+            kw,
+            KEYWORD_CHIP,
+            state.mode == SearchPaneMode::Keyword,
+            p,
+        );
         render_chip(frame, ai, AI_CHIP, state.mode == SearchPaneMode::Ai, p);
     }
 
@@ -99,7 +105,10 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
         };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                format!(" {}", truncate_end(&text, usize::from(status.width).saturating_sub(1))),
+                format!(
+                    " {}",
+                    truncate_end(&text, usize::from(status.width).saturating_sub(1))
+                ),
                 style,
             ))),
             status,
@@ -113,7 +122,12 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
     }
     let rows = body_rows(state);
     let width = usize::from(body.width);
-    for (i, row) in rows.iter().skip(state.scroll).take(usize::from(body.height)).enumerate() {
+    for (i, row) in rows
+        .iter()
+        .skip(state.scroll)
+        .take(usize::from(body.height))
+        .enumerate()
+    {
         let y = body.y + i as u16;
         let rect = Rect::new(body.x, y, body.width, 1);
         match row {
@@ -166,10 +180,7 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
                 let spans = vec![
                     Span::styled(marker, Style::default().fg(p.accent)),
                     Span::styled(before, base),
-                    Span::styled(
-                        matched,
-                        base.fg(p.accent).add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(matched, base.fg(p.accent).add_modifier(Modifier::BOLD)),
                     Span::styled(after, base),
                 ];
                 frame.render_widget(Paragraph::new(Line::from(spans)), rect);
@@ -178,7 +189,13 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
     }
 }
 
-fn render_chip(frame: &mut Frame, rect: Rect, label: &str, active: bool, p: &crate::app::state::Palette) {
+fn render_chip(
+    frame: &mut Frame,
+    rect: Rect,
+    label: &str,
+    active: bool,
+    p: &crate::app::state::Palette,
+) {
     if rect.width == 0 {
         return;
     }
@@ -214,7 +231,10 @@ fn tail_fit(text: &str, avail: usize) -> String {
 /// Split the snippet into (before, match, after), windowed so the match is visible
 /// in `avail` columns. The match length is taken from the searched query when it
 /// still appears in the snippet; otherwise the whole line is shown plain.
-fn window_snippet(hit: &crate::app::search_pane::SearchHit, avail: usize) -> (String, String, String) {
+fn window_snippet(
+    hit: &crate::app::search_pane::SearchHit,
+    avail: usize,
+) -> (String, String, String) {
     let chars: Vec<char> = hit.snippet.chars().collect();
     let match_len = (hit.text_match.end.col as usize)
         .saturating_sub(hit.text_match.start.col as usize)
@@ -234,7 +254,10 @@ fn window_snippet(hit: &crate::app::search_pane::SearchHit, avail: usize) -> (St
     let win_end = (win_start + avail).min(chars.len());
     let slice = |a: usize, b: usize| chars[a.min(b)..b].iter().collect::<String>();
     let mut before = slice(win_start, start.max(win_start).min(win_end));
-    let matched = slice(start.max(win_start).min(win_end), end.min(win_end).max(win_start));
+    let matched = slice(
+        start.max(win_start).min(win_end),
+        end.min(win_end).max(win_start),
+    );
     let mut after = slice(end.max(win_start).min(win_end), win_end);
     if win_start > 0 && !before.is_empty() {
         before.replace_range(..before.chars().next().map_or(0, char::len_utf8), "…");

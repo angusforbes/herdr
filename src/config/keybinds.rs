@@ -317,6 +317,12 @@ pub struct Keybinds {
     pub workspace_picker: ActionKeybinds,
     pub goto: ActionKeybinds,
     pub search_pane: ActionKeybinds,
+    pub focus_panel_next: ActionKeybinds,
+    pub focus_panel_previous: ActionKeybinds,
+    pub search_result_previous: ActionKeybinds,
+    pub search_result_next: ActionKeybinds,
+    pub search_input: ActionKeybinds,
+    pub search_mode: ActionKeybinds,
     pub detach: ActionKeybinds,
     pub reload_config: ActionKeybinds,
     pub open_notification_target: ActionKeybinds,
@@ -487,6 +493,12 @@ impl Config {
             workspace_picker: empty_action!(),
             goto: empty_action!(),
             search_pane: empty_action!(),
+            focus_panel_next: empty_action!(),
+            focus_panel_previous: empty_action!(),
+            search_result_previous: empty_action!(),
+            search_result_next: empty_action!(),
+            search_input: empty_action!(),
+            search_mode: empty_action!(),
             detach: empty_action!(),
             reload_config: empty_action!(),
             open_notification_target: empty_action!(),
@@ -617,6 +629,16 @@ impl Config {
             apply_action!(keybinds.workspace_picker, workspace_picker, source);
             apply_action!(keybinds.goto, goto, source);
             apply_action!(keybinds.search_pane, search_pane, source);
+            apply_action!(keybinds.focus_panel_next, focus_panel_next, source);
+            apply_action!(keybinds.focus_panel_previous, focus_panel_previous, source);
+            apply_action!(
+                keybinds.search_result_previous,
+                search_result_previous,
+                source
+            );
+            apply_action!(keybinds.search_result_next, search_result_next, source);
+            apply_action!(keybinds.search_input, search_input, source);
+            apply_action!(keybinds.search_mode, search_mode, source);
             apply_action!(keybinds.detach, detach, source);
             apply_action!(keybinds.reload_config, reload_config, source);
             apply_action!(
@@ -1495,6 +1517,65 @@ mod tests {
             .iter()
             .map(|binding| binding.trigger)
             .collect()
+    }
+
+    #[test]
+    fn panel_and_search_defaults_parse_as_direct_bindings() {
+        let config = Config::default();
+        let kb = config.keybinds();
+        let ctrl = KeyModifiers::CONTROL;
+        let result_mods = ctrl;
+        for (bindings, combo, label) in [
+            (&kb.focus_panel_next, (KeyCode::Tab, ctrl), "ctrl+tab"),
+            (
+                &kb.focus_panel_previous,
+                (KeyCode::BackTab, ctrl),
+                "ctrl+shift+tab",
+            ),
+            (
+                &kb.search_result_previous,
+                (KeyCode::Up, result_mods),
+                "ctrl+up",
+            ),
+            (
+                &kb.search_result_next,
+                (KeyCode::Down, result_mods),
+                "ctrl+down",
+            ),
+            (&kb.search_input, (KeyCode::Char('\''), ctrl), "ctrl+'"),
+            (&kb.search_mode, (KeyCode::Char('/'), ctrl), "ctrl+/"),
+        ] {
+            assert_eq!(
+                binding_triggers(bindings),
+                vec![BindingTrigger::Direct(combo)]
+            );
+            assert_eq!(bindings.label().as_deref(), Some(label));
+            assert!(bindings.matches_direct_key(&TerminalKey::new(combo.0, combo.1)));
+        }
+        assert!(config.collect_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn panel_previous_matches_ctrl_shift_tab_normalizations() {
+        let kb = Config::default().keybinds();
+        assert_eq!(
+            parse_key_combo("ctrl+shift+tab"),
+            Some((KeyCode::BackTab, KeyModifiers::CONTROL))
+        );
+        for (code, mods) in [
+            (KeyCode::Tab, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            (KeyCode::BackTab, KeyModifiers::CONTROL),
+            (
+                KeyCode::BackTab,
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+        ] {
+            let key = TerminalKey::new(code, mods);
+            assert!(kb.focus_panel_previous.matches_direct_key(&key));
+            assert!(!kb.focus_panel_next.matches_direct_key(&key));
+        }
+        assert_eq!(parse_key_combo("ctrl+quote"), parse_key_combo("ctrl+'"));
+        assert_eq!(parse_key_combo("ctrl+slash"), parse_key_combo("ctrl+/"));
     }
 
     #[test]

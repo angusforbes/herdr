@@ -299,6 +299,14 @@ impl TerminalRuntime {
         self.0.search_text_matches_with_lines(query, case_sensitive)
     }
 
+    pub(crate) fn find_recent_text_quotes(
+        &self,
+        quotes: &[Vec<String>],
+        max_rows: usize,
+    ) -> Vec<Option<(usize, crate::pane::TerminalTextMatch, String)>> {
+        self.0.find_recent_text_quotes(quotes, max_rows)
+    }
+
     pub(crate) fn text_match_is_current(&self, text_match: crate::pane::TerminalTextMatch) -> bool {
         self.0.text_match_is_current(text_match)
     }

@@ -75,6 +75,11 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
             help_entry(keybind_label(&kb.detach), "detach"),
             help_entry(keybind_label(&kb.reload_config), "reload config"),
             help_entry(
+                keybind_label(&kb.focus_panel_next),
+                "next panel: Spaces / Agents / terminal / Search (if open)",
+            ),
+            help_entry(keybind_label(&kb.focus_panel_previous), "previous panel"),
+            help_entry(
                 keybind_label(&kb.open_notification_target),
                 "open notification target",
             ),
@@ -85,13 +90,22 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
         "navigation",
         vec![
             help_entry("esc", "back"),
+            help_entry("up / down", "send to main terminal from any panel"),
             help_entry(
                 format!(
                     "{} / {}",
-                    keybind_label(&kb.navigate.workspace_up),
-                    keybind_label(&kb.navigate.workspace_down)
+                    keybind_label(&kb.previous_workspace),
+                    keybind_label(&kb.next_workspace)
                 ),
-                "workspace list",
+                "previous / next workspace from any panel",
+            ),
+            help_entry(
+                format!(
+                    "{} / {}",
+                    keybind_label(&kb.previous_agent),
+                    keybind_label(&kb.next_agent)
+                ),
+                "previous / next agent from any panel",
             ),
             help_entry(
                 format!(
@@ -106,6 +120,16 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
             help_entry("tab / shift+tab", "cycle pane"),
             help_entry("enter", "open workspace"),
             help_entry("1..9", "switch workspace"),
+        ],
+    ));
+
+    groups.push((
+        "search (open, normal modes only)",
+        vec![
+            help_entry(keybind_label(&kb.search_result_previous), "previous result"),
+            help_entry(keybind_label(&kb.search_result_next), "next result"),
+            help_entry(keybind_label(&kb.search_input), "focus search input"),
+            help_entry(keybind_label(&kb.search_mode), "switch keyword / AI mode"),
         ],
     ));
 

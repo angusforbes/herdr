@@ -199,7 +199,8 @@ fn handle_connection_with_stop(
     let request_id = request.id.clone();
     let method = api_method_name(&request.method);
     let changes_ui = request_changes_ui(&request);
-    crate::logging::api_request_started(&request_id, method, changes_ui);
+    let trace = api_request_trace(&request.method);
+    crate::logging::api_request_started(&request_id, method, changes_ui, &trace);
 
     match request.method {
         Method::PaneGraphicsStream(params) => {
@@ -211,10 +212,14 @@ fn handle_connection_with_stop(
                     method,
                     "stream_closed",
                     changes_ui,
+                    &trace,
                 ),
-                Err(err) => {
-                    crate::logging::api_request_failed(&request_id, method, &err.to_string())
-                }
+                Err(err) => crate::logging::api_request_failed(
+                    &request_id,
+                    method,
+                    &err.to_string(),
+                    &trace,
+                ),
             }
             result
         }
@@ -233,10 +238,14 @@ fn handle_connection_with_stop(
                     method,
                     "stream_closed",
                     changes_ui,
+                    &trace,
                 ),
-                Err(err) => {
-                    crate::logging::api_request_failed(&request_id, method, &err.to_string())
-                }
+                Err(err) => crate::logging::api_request_failed(
+                    &request_id,
+                    method,
+                    &err.to_string(),
+                    &trace,
+                ),
             }
             result
         }
@@ -249,7 +258,14 @@ fn handle_connection_with_stop(
                 event_hub,
                 running,
             )?;
-            finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
+            finish_wait_response(
+                &mut stream,
+                response,
+                &request_id,
+                method,
+                changes_ui,
+                &trace,
+            )
         }
         Method::AgentPrompt(params) => {
             let response = prompt_agent(
@@ -260,7 +276,14 @@ fn handle_connection_with_stop(
                 event_hub,
                 running,
             )?;
-            finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
+            finish_wait_response(
+                &mut stream,
+                response,
+                &request_id,
+                method,
+                changes_ui,
+                &trace,
+            )
         }
         Method::AgentWait(params) => {
             let response = wait_for_agent(
@@ -271,12 +294,26 @@ fn handle_connection_with_stop(
                 event_hub,
                 running,
             )?;
-            finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
+            finish_wait_response(
+                &mut stream,
+                response,
+                &request_id,
+                method,
+                changes_ui,
+                &trace,
+            )
         }
         Method::PaneWaitForOutput(params) => {
             let response =
                 wait_for_output(request_id.clone(), params, &mut stream, api_tx, running)?;
-            finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
+            finish_wait_response(
+                &mut stream,
+                response,
+                &request_id,
+                method,
+                changes_ui,
+                &trace,
+            )
         }
         method_body => {
             let (response_write_tx, response_write_rx) = std::sync::mpsc::channel();
@@ -298,10 +335,14 @@ fn handle_connection_with_stop(
                     method,
                     api_response_outcome(&response),
                     changes_ui,
+                    &trace,
                 ),
-                Err(err) => {
-                    crate::logging::api_request_failed(&request_id, method, &err.to_string())
-                }
+                Err(err) => crate::logging::api_request_failed(
+                    &request_id,
+                    method,
+                    &err.to_string(),
+                    &trace,
+                ),
             }
             result
         }
@@ -314,6 +355,7 @@ fn finish_wait_response(
     request_id: &str,
     method: &'static str,
     changes_ui: bool,
+    trace: &crate::logging::ApiTrace,
 ) -> std::io::Result<()> {
     let Some(response) = response else {
         crate::logging::api_request_completed(
@@ -321,6 +363,7 @@ fn finish_wait_response(
             method,
             "client_disconnected",
             changes_ui,
+            trace,
         );
         return Ok(());
     };
@@ -331,10 +374,29 @@ fn finish_wait_response(
             method,
             api_response_outcome(&response),
             changes_ui,
+            trace,
         ),
-        Err(err) => crate::logging::api_request_failed(request_id, method, &err.to_string()),
+        Err(err) => crate::logging::api_request_failed(request_id, method, &err.to_string(), trace),
     }
     result
+}
+
+/// Attribution details for the methods that deliver input into a pane.
+///
+/// Only the injection paths are traced: these are the requests whose effect
+/// lands in someone else's conversation, and the ones a replayed or duplicated
+/// delivery has to be reconstructed from. Payload text is never logged, only
+/// its length and a truncated hash.
+fn api_request_trace(method: &Method) -> crate::logging::ApiTrace {
+    use crate::logging::ApiTrace;
+    match method {
+        Method::AgentPrompt(params) => ApiTrace::with_payload(&params.target, &params.text),
+        Method::PaneSendText(params) => ApiTrace::with_payload(&params.pane_id, &params.text),
+        Method::PaneSendKeys(params) => {
+            ApiTrace::with_payload(&params.pane_id, &params.keys.join(" "))
+        }
+        _ => ApiTrace::default(),
+    }
 }
 
 fn handle_request(
@@ -1466,5 +1528,85 @@ mod pane_graphics_request_tests {
         let encoded = r#"{"id":"duplicate","method":"ping","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#;
 
         assert!(serde_json::from_str::<Request>(encoded).is_err());
+    }
+}
+
+/// Tests for API request attribution: which requests get a traced target pane
+/// and payload fingerprint, and the guarantee that payload text is never one of
+/// the logged fields.
+#[cfg(test)]
+mod api_trace_tests {
+    use super::*;
+
+    fn agent_prompt(target: &str, text: &str) -> Method {
+        Method::AgentPrompt(crate::api::schema::AgentPromptParams {
+            target: target.to_string(),
+            text: text.to_string(),
+            wait: None,
+        })
+    }
+
+    #[test]
+    fn agent_prompt_trace_records_target_and_payload_shape() {
+        let trace = api_request_trace(&agent_prompt("w9:p3", "hello there"));
+
+        assert_eq!(trace.target_pane.as_deref(), Some("w9:p3"));
+        assert_eq!(trace.payload_len, Some("hello there".len()));
+        assert_eq!(trace.payload_sha.as_deref().map(str::len), Some(12));
+    }
+
+    #[test]
+    fn trace_never_carries_payload_text() {
+        let secret = "correct horse battery staple";
+        let trace = api_request_trace(&agent_prompt("w9:p3", secret));
+
+        let rendered = format!("{trace:?}");
+        assert!(
+            !rendered.contains(secret),
+            "payload content must not reach the log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn identical_payloads_share_a_fingerprint_and_differing_ones_do_not() {
+        // This is the property that makes a replayed injection identifiable:
+        // two entries with the same target, length and hash carried the same
+        // bytes, without the log ever storing those bytes.
+        let first = api_request_trace(&agent_prompt("w9:p3", "relay instruction"));
+        let replay = api_request_trace(&agent_prompt("w9:p3", "relay instruction"));
+        let other = api_request_trace(&agent_prompt("w9:p3", "relay instructio"));
+
+        assert_eq!(first.payload_sha, replay.payload_sha);
+        assert_ne!(first.payload_sha, other.payload_sha);
+    }
+
+    #[test]
+    fn send_text_and_send_keys_are_traced_too() {
+        let send_text = api_request_trace(&Method::PaneSendText(
+            crate::api::schema::PaneSendTextParams {
+                pane_id: "wB:p1".to_string(),
+                text: "abc".to_string(),
+            },
+        ));
+        assert_eq!(send_text.target_pane.as_deref(), Some("wB:p1"));
+        assert_eq!(send_text.payload_len, Some(3));
+
+        let send_keys = api_request_trace(&Method::PaneSendKeys(
+            crate::api::schema::PaneSendKeysParams {
+                pane_id: "wB:p2".to_string(),
+                keys: vec!["ctrl+c".to_string(), "enter".to_string()],
+            },
+        ));
+        assert_eq!(send_keys.target_pane.as_deref(), Some("wB:p2"));
+        assert_eq!(send_keys.payload_len, Some("ctrl+c enter".len()));
+    }
+
+    #[test]
+    fn non_injecting_methods_have_an_empty_trace() {
+        let trace = api_request_trace(&Method::Ping(crate::api::schema::PingParams::default()));
+
+        assert!(trace.target_pane.is_none());
+        assert!(trace.payload_len.is_none());
+        assert!(trace.payload_sha.is_none());
     }
 }

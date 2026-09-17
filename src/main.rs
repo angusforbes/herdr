@@ -183,6 +183,14 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # workspace_picker = "prefix+w"
 # goto = "prefix+g"
 # search_pane = "ctrl+s"
+# Panel ring: Spaces -> Agents -> terminal -> Search (if open).
+# focus_panel_next = "ctrl+tab"
+# focus_panel_previous = "ctrl+shift+tab"
+# Search shortcuts below apply only while search is open, in normal modes.
+# search_result_previous = "ctrl+up"
+# search_result_next = "ctrl+down"
+# search_input = "ctrl+'"
+# search_mode = "ctrl+/"
 # new_workspace = "prefix+shift+n"
 # new_worktree = "prefix+shift+g"
 # open_worktree = ""    # optional, unset by default
