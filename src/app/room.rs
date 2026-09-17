@@ -15,6 +15,7 @@ use crossterm::event::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TranscriptRole {
     Human,
+    AgentHeader,
     Agent,
     Spacer,
 }

@@ -52,6 +52,8 @@ pub(super) fn compute_room_view(app: &mut AppState, area: Rect, terminal_height:
                 width as usize,
                 &mut ui.transcript_lines,
             );
+            ui.transcript_roles
+                .resize(ui.transcript_lines.len(), TranscriptRole::AgentHeader);
         }
         wrap_into(&message.text, width as usize, &mut ui.transcript_lines);
         let role = if message.author.is_none() {
@@ -137,10 +139,10 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
         TranscriptRole::Human => Style::default()
             .fg(app.palette.text)
             .bg(app.palette.surface0),
-        TranscriptRole::Agent => Style::default().fg(app.palette.text).bg(agent_bg),
-        TranscriptRole::Spacer => Style::default(),
+        TranscriptRole::AgentHeader => Style::default().fg(app.palette.text).bg(agent_bg),
+        TranscriptRole::Agent | TranscriptRole::Spacer => Style::default(),
     };
-    // Paint message rows including their padding; leave inter-message gaps clear.
+    // Only human messages fill the row. Agent names are tinted spans, not cards.
     for (offset, role) in ui
         .transcript_roles
         .iter()
@@ -148,7 +150,7 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
         .take(transcript.height as usize)
         .enumerate()
     {
-        if *role != TranscriptRole::Spacer {
+        if *role == TranscriptRole::Human {
             frame.buffer_mut().set_style(
                 Rect::new(
                     transcript.x,
@@ -179,14 +181,10 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
                     .unwrap_or(TranscriptRole::Spacer),
             );
             Line::from(vec![
-                Span::raw(&line[..range.start]),
-                Span::styled(
-                    &line[range.clone()],
-                    Style::default().add_modifier(Modifier::REVERSED),
-                ),
-                Span::raw(&line[range.end..]),
+                Span::styled(&line[..range.start], style),
+                Span::styled(&line[range.clone()], style.add_modifier(Modifier::REVERSED)),
+                Span::styled(&line[range.end..], style),
             ])
-            .style(style)
         })
         .collect();
     frame.render_widget(Paragraph::new(visible), transcript);
@@ -391,7 +389,7 @@ mod tests {
                 TranscriptRole::Human,
                 TranscriptRole::Human,
                 TranscriptRole::Spacer,
-                TranscriptRole::Agent,
+                TranscriptRole::AgentHeader,
                 TranscriptRole::Agent,
                 TranscriptRole::Spacer
             ]
@@ -429,13 +427,13 @@ mod tests {
         }
         let tint = workspace_message_tint(app.palette.surface0, app.workspace_color(0));
         assert_ne!(tint, app.palette.surface0);
-        for row in [3, 4] {
-            assert_eq!(
-                buffer[(79, row)].bg,
-                tint,
-                "agent header and body padding tinted"
-            );
-            assert_eq!(buffer[(0, row)].bg, tint);
+        for col in 0..6 {
+            assert_eq!(buffer[(col, 3)].bg, tint, "only the name is tinted");
+        }
+        assert_eq!(buffer[(6, 3)].bg, Color::Reset, "header padding is plain");
+        assert_eq!(buffer[(79, 3)].bg, Color::Reset);
+        for col in [0, 5, 79] {
+            assert_eq!(buffer[(col, 4)].bg, Color::Reset, "reply body is plain");
         }
         assert_ne!(buffer[(79, 2)].bg, tint, "message gap stays clear");
         assert_eq!(
