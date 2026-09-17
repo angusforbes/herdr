@@ -178,6 +178,24 @@ impl Room {
     }
 }
 
+/// Use the chosen name, not the generic executable label or decorative prefix.
+pub fn chosen_name<'a>(name: &'a str, agent: &str, pane: &str) -> Option<&'a str> {
+    let name = name.trim();
+    let name = match name.split_once(char::is_whitespace) {
+        Some((prefix, rest))
+            if !prefix.chars().any(char::is_alphanumeric) && !rest.trim().is_empty() =>
+        {
+            rest.trim()
+        }
+        _ => name,
+    };
+    (!name.is_empty() && !name.eq_ignore_ascii_case(agent) && name != pane).then_some(name)
+}
+
+pub fn author_heading(member: &Member) -> &str {
+    chosen_name(&member.name, &member.agent, &member.pane_id).unwrap_or(&member.pane_id)
+}
+
 /// Derive current membership on demand outside rendering. Never use saved session
 /// metadata to resurrect a binding, and never treat a plain shell as an agent.
 pub fn members(state: &crate::app::AppState, ws_idx: usize) -> Vec<Member> {
@@ -209,10 +227,23 @@ pub fn members(state: &crate::app::AppState, ws_idx: usize) -> Vec<Member> {
                     };
                     format!("{kind}:{}", session.value)
                 });
+            let public_pane = crate::workspace::public_pane_id_for_number(&ws.id, public_number);
+            let name = terminal
+                .metadata_tokens
+                .value("name")
+                .and_then(|name| chosen_name(name, &label, &public_pane))
+                .or_else(|| {
+                    terminal
+                        .agent_name
+                        .as_deref()
+                        .and_then(|name| chosen_name(name, &label, &public_pane))
+                })
+                .unwrap_or(&public_pane)
+                .to_owned();
             result.push(Member {
-                pane_id: crate::workspace::public_pane_id_for_number(&ws.id, public_number),
+                pane_id: public_pane,
                 terminal_id: terminal.id.to_string(),
-                name: terminal.agent_name.clone().unwrap_or_else(|| label.clone()),
+                name,
                 agent: label,
                 session,
             });
@@ -234,6 +265,19 @@ mod tests {
             session: Some("session-a".into()),
         }
     }
+    #[test]
+    fn room_author_heading_uses_chosen_name_or_pane_only() {
+        let mut author = member();
+        author.name = "∴ Aporia".into();
+        assert_eq!(author_heading(&author), "Aporia");
+        for name in ["", "pi", "  PI  ", "w1:p1"] {
+            author.name = name.into();
+            assert_eq!(author_heading(&author), "w1:p1");
+        }
+        author.name = "张三".into();
+        assert_eq!(author_heading(&author), "张三");
+    }
+
     #[test]
     fn room_sequence_correlation_and_duplicate_reply() {
         let mut room = Room::default();

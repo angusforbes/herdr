@@ -1,7 +1,10 @@
-use crate::app::{room::editor, AppState, Mode};
+use crate::app::{
+    room::{editor, TranscriptRole},
+    AppState, Mode,
+};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
@@ -38,23 +41,27 @@ pub(super) fn compute_room_view(app: &mut AppState, area: Rect, terminal_height:
     if ui.transcript_width != width || ui.transcript_messages > ws.room.messages.len() {
         ui.selection = None; // display-row coordinates cease to exist on rewrap
         ui.transcript_lines.clear();
-        ui.transcript_human.clear();
+        ui.transcript_roles.clear();
         ui.transcript_messages = 0;
         ui.transcript_width = width;
     }
     for message in ws.room.messages.iter().skip(ui.transcript_messages) {
         if let Some(author) = &message.author {
             wrap_into(
-                &format!("{} ({})", author.name, author.pane_id),
+                crate::room::author_heading(author),
                 width as usize,
                 &mut ui.transcript_lines,
             );
         }
         wrap_into(&message.text, width as usize, &mut ui.transcript_lines);
-        ui.transcript_human
-            .resize(ui.transcript_lines.len(), message.author.is_none());
+        let role = if message.author.is_none() {
+            TranscriptRole::Human
+        } else {
+            TranscriptRole::Agent
+        };
+        ui.transcript_roles.resize(ui.transcript_lines.len(), role);
         ui.transcript_lines.push(String::new());
-        ui.transcript_human.push(false);
+        ui.transcript_roles.push(TranscriptRole::Spacer);
     }
     ui.transcript_messages = ws.room.messages.len();
     ui.scroll = ui.scroll.min(
@@ -105,18 +112,43 @@ fn room_areas(area: Rect, ui: &crate::app::room::RoomPresentation) -> [Rect; 3] 
     .areas(area)
 }
 
+fn workspace_message_tint(surface: Color, accent: Color) -> Color {
+    let (r, g, b) = match surface {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (245, 245, 245),
+    };
+    let Color::Rgb(ar, ag, ab) = accent else {
+        return surface;
+    };
+    // A subtle workspace wash, relative to the theme surface so dark themes
+    // retain readable text. Compute once per room render, never per pane/row.
+    let mix = |base: u8, tint: u8| ((u16::from(base) * 4 + u16::from(tint)) / 5) as u8;
+    Color::Rgb(mix(r, ar), mix(g, ag), mix(b, ab))
+}
+
 pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
     let ui = &app.room_ui;
     let [transcript, status, composer] = room_areas(area, ui);
-    // Paint full human message rows (including blank/padded cells), not just spans.
-    for (offset, human) in ui
-        .transcript_human
+    let agent_bg = workspace_message_tint(
+        app.palette.surface0,
+        app.workspace_color(app.active.unwrap_or(0)),
+    );
+    let message_style = |role: TranscriptRole| match role {
+        TranscriptRole::Human => Style::default()
+            .fg(app.palette.text)
+            .bg(app.palette.surface0),
+        TranscriptRole::Agent => Style::default().fg(app.palette.text).bg(agent_bg),
+        TranscriptRole::Spacer => Style::default(),
+    };
+    // Paint message rows including their padding; leave inter-message gaps clear.
+    for (offset, role) in ui
+        .transcript_roles
         .iter()
         .skip(ui.transcript_begin)
         .take(transcript.height as usize)
         .enumerate()
     {
-        if *human {
+        if *role != TranscriptRole::Spacer {
             frame.buffer_mut().set_style(
                 Rect::new(
                     transcript.x,
@@ -124,9 +156,7 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
                     transcript.width,
                     1,
                 ),
-                Style::default()
-                    .fg(app.palette.text)
-                    .bg(app.palette.surface0),
+                message_style(*role),
             );
         }
     }
@@ -142,13 +172,12 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
                 .as_ref()
                 .map(|s| s.range(row, line.len()))
                 .unwrap_or(0..0);
-            let style = if ui.transcript_human.get(row) == Some(&true) {
-                Style::default()
-                    .fg(app.palette.text)
-                    .bg(app.palette.surface0)
-            } else {
-                Style::default()
-            };
+            let style = message_style(
+                ui.transcript_roles
+                    .get(row)
+                    .copied()
+                    .unwrap_or(TranscriptRole::Spacer),
+            );
             Line::from(vec![
                 Span::raw(&line[..range.start]),
                 Span::styled(
@@ -311,6 +340,23 @@ mod tests {
     }
 
     #[test]
+    fn room_agent_tint_tracks_workspace_and_surface() {
+        let orange = Color::Rgb(255, 158, 100);
+        assert_eq!(
+            workspace_message_tint(Color::Rgb(245, 245, 247), orange),
+            Color::Rgb(247, 227, 217)
+        );
+        assert_eq!(
+            workspace_message_tint(Color::Rgb(30, 30, 30), orange),
+            Color::Rgb(75, 55, 44)
+        );
+        assert_ne!(
+            workspace_message_tint(Color::Rgb(245, 245, 247), orange),
+            workspace_message_tint(Color::Rgb(245, 245, 247), Color::Rgb(122, 162, 247))
+        );
+    }
+
+    #[test]
     fn room_headers_and_human_background_are_conversation_only() {
         use ratatui::{backend::TestBackend, Terminal};
         let mut app = AppState::test_new();
@@ -337,11 +383,18 @@ mod tests {
         compute_room_view(&mut app, area, area.height);
         assert_eq!(
             app.room_ui.transcript_lines,
-            ["question", "界", "", "Aporia (wB:p2)", "answer", ""]
+            ["question", "界", "", "Aporia", "answer", ""]
         );
         assert_eq!(
-            app.room_ui.transcript_human,
-            [true, true, false, false, false, false]
+            app.room_ui.transcript_roles,
+            [
+                TranscriptRole::Human,
+                TranscriptRole::Human,
+                TranscriptRole::Spacer,
+                TranscriptRole::Agent,
+                TranscriptRole::Agent,
+                TranscriptRole::Spacer
+            ]
         );
         use crate::app::room::selection::{Point, Selection};
         app.room_ui.selection = Some(Selection {
@@ -355,7 +408,7 @@ mod tests {
                 .unwrap()
                 .text(&app.room_ui.transcript_lines)
                 .unwrap(),
-            "question\n界\n\nAporia (wB:p2)\nanswer"
+            "question\n界\n\nAporia\nanswer"
         );
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
@@ -374,7 +427,17 @@ mod tests {
                 "selection distinct from background"
             );
         }
-        assert_ne!(buffer[(79, 3)].bg, app.palette.surface0);
+        let tint = workspace_message_tint(app.palette.surface0, app.workspace_color(0));
+        assert_ne!(tint, app.palette.surface0);
+        for row in [3, 4] {
+            assert_eq!(
+                buffer[(79, row)].bg,
+                tint,
+                "agent header and body padding tinted"
+            );
+            assert_eq!(buffer[(0, row)].bg, tint);
+        }
+        assert_ne!(buffer[(79, 2)].bg, tint, "message gap stays clear");
         assert_eq!(
             app.workspaces[0].room, stored,
             "presentation must not mutate history"

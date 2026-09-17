@@ -39,6 +39,29 @@ fn room_summary_keeps_earlier_pending_questions_visible() {
     assert!(!delivery_summary(&deliveries[3..]).contains("Earlier requests"));
 }
 
+#[test]
+fn room_member_name_uses_sidebar_metadata_before_managed_name() {
+    let mut app = app();
+    identify(&mut app, "named");
+    let initial = crate::room::members(&app.state, 0).remove(0);
+    assert_eq!(initial.name, initial.pane_id);
+    let id = app.state.workspaces[0].tabs[0]
+        .panes
+        .values()
+        .next()
+        .unwrap()
+        .attached_terminal_id
+        .clone();
+    let terminal = app.state.terminals.get_mut(&id).unwrap();
+    terminal.set_agent_name("managed-name".into());
+    terminal.metadata_tokens.patch(
+        std::collections::HashMap::from([("name".into(), Some("∴ Aporia".into()))]),
+        None,
+        std::time::Instant::now(),
+    );
+    assert_eq!(crate::room::members(&app.state, 0)[0].name, "Aporia");
+}
+
 fn app() -> App {
     let mut app = App::new(
         &crate::config::Config::default(),

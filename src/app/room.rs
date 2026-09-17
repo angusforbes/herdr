@@ -12,13 +12,20 @@ use crossterm::event::{
     KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TranscriptRole {
+    Human,
+    Agent,
+    Spacer,
+}
+
 #[derive(Default)]
 pub struct RoomPresentation {
     pub workspace: Option<String>,
     pub visible: bool,
     pub transcript_lines: Vec<String>,
     /// Parallel display-row roles; rebuilt/appended together with cached text.
-    pub transcript_human: Vec<bool>,
+    pub transcript_roles: Vec<TranscriptRole>,
     pub transcript_width: u16,
     pub transcript_messages: usize,
     pub composer: String,
@@ -126,13 +133,13 @@ impl AppState {
             }
         }
         if let Some(id) = workspace {
-            self.room_ui = self
-                .room_presentations
-                .remove(&id)
-                .unwrap_or_else(|| RoomPresentation {
-                    workspace: Some(id),
-                    ..Default::default()
-                });
+            self.room_ui =
+                self.room_presentations
+                    .remove(&id)
+                    .unwrap_or_else(|| RoomPresentation {
+                        workspace: Some(id),
+                        ..Default::default()
+                    });
         }
         if self.room_active() {
             self.prepare_room_surface();
