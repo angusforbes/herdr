@@ -1,5 +1,7 @@
 #[path = "delivery_tests.rs"]
 mod delivery_tests;
+#[path = "parity_tests.rs"]
+mod parity_tests;
 #[path = "ux_tests.rs"]
 mod ux_tests;
 use super::*;
@@ -410,14 +412,10 @@ async fn room_composer_reports_nonreplyable_member_without_hiding_it() {
     app.state.room_ui.recipient = app.state.room_ui.members.first().cloned();
     app.state.room_ui.composer = "question".into();
     app.post_room_composer();
-    assert!(app
-        .state
-        .room_ui
-        .status
-        .contains("no live session identity"));
-    assert!(!app.state.room_ui.status.contains("changed"));
-    assert_eq!(app.state.room_ui.composer, "question");
-    assert!(app.state.workspaces[0].room.messages.is_empty());
+    assert!(app.state.room_ui.status.contains("1 unavailable"));
+    assert!(app.state.room_ui.composer.is_empty());
+    assert!(app.state.room_ui.recipient.is_none());
+    assert_eq!(app.state.workspaces[0].room.messages.len(), 1);
     assert_eq!(app.state.room_ui.members.len(), 1);
 }
 
@@ -473,7 +471,7 @@ async fn room_members_follow_runtime_panes_between_workspaces() {
 }
 
 #[tokio::test]
-async fn room_selected_recipient_does_not_rebind_after_replacement() {
+async fn room_ui_ignores_and_clears_stale_recipient_after_replacement() {
     let mut app = app();
     identify(&mut app, "old");
     app.state.select_room();
@@ -482,31 +480,38 @@ async fn room_selected_recipient_does_not_rebind_after_replacement() {
     identify(&mut app, "new");
     app.refresh_room_members();
     app.post_room_composer();
-    assert!(app.state.workspaces[0].room.messages.is_empty());
-    assert!(app.state.room_ui.status.contains("Recipient changed"));
+    assert!(app.state.room_ui.recipient.is_none());
+    let message = &app.state.workspaces[0].room.messages[0];
+    assert!(message.recipient.is_none());
+    assert_eq!(message.recipients, crate::room::members(&app.state, 0));
 }
 
 #[tokio::test]
-async fn room_tab_clears_stale_recipient_before_selecting_current_member() {
+async fn room_tab_never_selects_recipients_or_changes_hidden_pane() {
     let mut app = app();
     identify(&mut app, "old");
     app.state.select_room();
-    app.state.room_ui.recipient = app.state.room_ui.members.first().cloned();
-    identify(&mut app, "new");
-    app.refresh_room_members();
-    let tab = TerminalKey::new(KeyCode::Tab, KeyModifiers::NONE);
-    app.handle_room_key(&tab);
-    assert!(app.state.room_ui.recipient.is_none());
-    assert!(app
-        .state
-        .room_ui
-        .status
-        .contains("selection cleared to all"));
-    app.handle_room_key(&tab);
-    assert_eq!(
-        app.state.room_ui.recipient.as_ref(),
-        app.state.room_ui.members.first()
-    );
+    app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+    app.state.ensure_test_terminals();
+    let focused = app.state.workspaces[0].focused_pane_id();
+    app.state.insert_room_text("draft");
+    let cursor = app.state.room_ui.editor.cursor;
+    for code in [KeyCode::Tab, KeyCode::BackTab, KeyCode::Tab] {
+        app.route_client_events_from(
+            42,
+            vec![RawInputEvent::Key(TerminalKey::new(
+                code,
+                KeyModifiers::NONE,
+            ))],
+            false,
+        );
+        assert!(app.state.room_active());
+        assert!(app.state.room_ui.recipient.is_none());
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), focused);
+        assert_eq!(app.state.room_ui.composer, "draft");
+        assert_eq!(app.state.room_ui.editor.cursor, cursor);
+        assert!(app.state.workspaces[0].room.messages.is_empty());
+    }
 }
 
 #[tokio::test]

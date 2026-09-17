@@ -134,7 +134,8 @@ impl App {
             && self.state.popup_pane.is_none()
             && self.state.mode == Mode::Terminal
         {
-            self.state.insert_room_text(text);
+            let ui = &mut self.state.room_ui;
+            ui.editor.type_text(&mut ui.composer, text);
             return;
         }
         if text.is_empty() {
@@ -171,7 +172,8 @@ impl App {
             && self.state.popup_pane.is_none()
             && self.state.mode == Mode::Terminal
         {
-            self.state.insert_room_text(&text);
+            let ui = &mut self.state.room_ui;
+            ui.editor.type_text(&mut ui.composer, &text);
             return;
         }
         if text.is_empty() {

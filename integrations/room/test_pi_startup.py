@@ -29,7 +29,7 @@ class PiStartupTests(unittest.TestCase):
         self.check_loader(startup_optin=True)
 
     @unittest.skipUnless(shutil.which("pi"), "installed Pi required")
-    def test_real_loader_registers_commands_without_optin_then_enable_disable_reload(self):
+    def test_real_loader_registers_commands_with_optout_then_enable_disable_reload(self):
         self.check_loader(startup_optin=False)
 
     def check_loader(self, startup_optin):
@@ -41,7 +41,7 @@ class PiStartupTests(unittest.TestCase):
             (source / "settings.json").write_text(json.dumps({"extensions": ["!**"], "packages": ["npm:not-installed-do-not-load"]}))
             env = disposable.environment(base, source)
             if not startup_optin:
-                env.pop("HERDR_ROOM_ENABLED")
+                env["HERDR_ROOM_ENABLED"] = "0"
             env.update(HERDR_ENV="1", HERDR_PANE_ID="w1.p1", HERDR_WORKSPACE_ID="w1", TERM="xterm-256color")
             env.pop("PI_PACKAGE_DIR", None)
             endpoint = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

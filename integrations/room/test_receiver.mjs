@@ -187,15 +187,15 @@ test("uncertain registration is not retried; missing workspace env uses exact li
   assert.equal(other.receiver.run.workspace, "w1"); other.receiver.stop();
 });
 
-test("missing preview opt-in, implicit socket or non-TUI never starts network resources", async () => {
+test("disabled receiver, implicit socket or non-TUI never starts network resources", async () => {
   for (const mutate of [f => { f.receiver.enabled = false; }, f => { delete f.receiver.env.HERDR_SOCKET_PATH; }, f => { f.ctx.mode = "rpc"; }]) {
     const f = fixture(); mutate(f); await f.receiver.start(f.ctx);
     assert.equal(f.requests.length, 0); assert.equal(f.timers.size, 0);
   }
 });
 
-test("commands register while inactive; explicit enable uses current exact binding without inference", async () => {
-  const f = fixture({ HERDR_ROOM_ENABLED: undefined });
+test("commands register while opted out; explicit enable uses current exact binding without inference", async () => {
+  const f = fixture({ HERDR_ROOM_ENABLED: "0" });
   const commands = new Map(), events = new Map();
   registerRoomLifecycle({ registerCommand: (n, c) => commands.set(n, c), on: (n, h) => events.set(n, h) }, f.receiver);
   assert.deepEqual([...commands.keys()], ["room-enable", "room-disable"]);
@@ -213,7 +213,7 @@ test("commands register while inactive; explicit enable uses current exact bindi
   assert.equal(f.receiver.run, g); // idempotent, not a retry/reset
   for (let n = 0; n < 3; n++) await f.tick();
   assert.equal(f.sent.length, 0);
-  assert.equal(f.receiver.env.HERDR_ROOM_ENABLED, undefined);
+  assert.equal(f.receiver.env.HERDR_ROOM_ENABLED, "0");
   assert.ok(f.requests.every(r => r.socket === "/tmp/explicit.sock"));
   assert.equal(f.requests.find(r => r.method.endsWith("register")).params.session, f.member.session);
   assert.equal(f.requests.find(r => r.method.endsWith("register")).params.pane_id, f.member.pane_id);
@@ -222,10 +222,28 @@ test("commands register while inactive; explicit enable uses current exact bindi
   await f.receiver.tick(); await events.get("session_start")({}, f.ctx);
   assert.equal(f.requests.length, count); assert.equal(f.timers.size, 0);
   assert.equal(f.receiver.run, undefined);
-  // /reload creates a new factory/receiver: no persistence of command opt-in.
-  const fresh = fixture({ HERDR_ROOM_ENABLED: undefined });
+  // Explicit environment opt-out also applies to a fresh factory after reload.
+  const fresh = fixture({ HERDR_ROOM_ENABLED: "0" });
   await fresh.receiver.start(fresh.ctx);
   assert.equal(fresh.requests.length, 0);
+});
+
+test("Herdr agents automatically connect on startup and reload without replay", async () => {
+  for (let n = 0; n < 2; n++) {
+    const f = fixture({ HERDR_ROOM_ENABLED: undefined });
+    await f.receiver.start(f.ctx);
+    assert.ok(f.receiver.run?.receiver);
+    await f.tick();
+    assert.equal(f.sent.length, 0);
+    assert.equal(f.requests.some(r => r.method === "room.read"), false);
+    f.receiver.disable(f.ctx);
+    assert.equal(f.receiver.run, undefined);
+  }
+  for (const env of [{ HERDR_SOCKET_PATH: undefined }, { HERDR_PANE_ID: undefined }]) {
+    const f = fixture({ HERDR_ROOM_ENABLED: undefined, ...env });
+    await f.receiver.start(f.ctx);
+    assert.equal(f.requests.length, 0);
+  }
 });
 
 test("explicit enable cannot infer socket, pane, or non-TUI identity", async () => {

@@ -11,8 +11,8 @@ export function sessionRef(ctx) {
 const sameMember = (a, b) => a && b && ["pane_id", "terminal_id", "session"].every(k => a[k] === b[k]);
 
 // Register even when inactive. Factories only wire handlers, never open sockets.
-// Pi replaces this instance on /reload and session replacement; explicit opt-in
-// is not persisted. Startup env opt-in remains the disposable preview default.
+// Reload creates a fresh receiver and rejoins by default inside Herdr. Disable
+// is instance-local; HERDR_ROOM_ENABLED=0 opts out across new instances.
 export function registerRoomLifecycle(pi, receiver) {
   pi.registerCommand("room-enable", {
     description: "Enable room questions for this Pi TUI (until reload/session replacement)",
@@ -35,7 +35,9 @@ export class RoomReceiver {
   constructor(pi, env, { call = socketCall, schedule = setTimeout, cancel = clearTimeout, now = Date.now } = {}) {
     this.pi = pi;
     this.env = { ...env };
-    this.enabled = env.HERDR_ROOM_ENABLED === "1";
+    this.enabled = env.HERDR_ROOM_ENABLED !== "0"
+      && env.HERDR_SOCKET_PATH?.startsWith("/") === true
+      && string(env.HERDR_PANE_ID);
     this.call = call;
     this.schedule = schedule;
     this.cancel = cancel;

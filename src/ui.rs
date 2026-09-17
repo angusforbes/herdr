@@ -334,7 +334,7 @@ fn compute_view_internal(
         split_borders,
         search_pane_rect,
     };
-    room::compute_room_view(app, terminal_area);
+    room::compute_room_view(app, terminal_area, area.height);
     app.sync_copy_mode_search_geometry();
 }
 
@@ -400,7 +400,7 @@ fn compute_mobile_view(
         split_borders,
         search_pane_rect: Rect::default(),
     };
-    room::compute_room_view(app, terminal_area);
+    room::compute_room_view(app, terminal_area, area.height);
     app.sync_copy_mode_search_geometry();
 }
 

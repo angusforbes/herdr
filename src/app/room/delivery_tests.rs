@@ -111,6 +111,44 @@ fn reply(app: &mut App, job: &crate::room_delivery::Delivery) -> RoomReplyParams
 }
 
 #[tokio::test]
+async fn room_ui_broadcasts_to_every_current_member_despite_legacy_target() {
+    let mut app = app();
+    identify(&mut app, "old");
+    app.state.select_room();
+    app.state.room_ui.recipient = app.state.room_ui.members.first().cloned();
+    identify(&mut app, "replacement");
+    let ada = crate::room::members(&app.state, 0).pop().unwrap();
+    let bob = add_member(&mut app, crate::detect::Agent::Pi, Some("/tmp/bob-ui"));
+    let receivers = [register(&mut app, &ada), register(&mut app, &bob)];
+    // Opening/refresh/Tab are presentation only, never delivery triggers.
+    app.refresh_room_members();
+    app.handle_room_key(&TerminalKey::new(KeyCode::Tab, KeyModifiers::NONE));
+    for receiver in &receivers {
+        assert!(claim(&mut app, receiver, true).is_none());
+    }
+    for text in ["first group question", "second group question"] {
+        app.state.insert_room_text(text);
+        app.handle_room_key(&TerminalKey::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.state.room_ui.recipient.is_none());
+        let message = app.state.workspaces[0].room.messages.last().unwrap();
+        assert!(message.recipient.is_none());
+        assert_eq!(message.recipients.len(), 2);
+        assert!(message.recipients.contains(&ada));
+        assert!(message.recipients.contains(&bob));
+        for receiver in &receivers {
+            let job = claim(&mut app, receiver, true).unwrap();
+            assert_eq!(job.text, text);
+            reply(&mut app, &job);
+            assert!(
+                claim(&mut app, receiver, true).is_none(),
+                "replies never fan out"
+            );
+        }
+    }
+    assert_eq!(app.state.workspaces[0].room.messages.len(), 6);
+}
+
+#[tokio::test]
 async fn room_delivery_api_broadcast_snapshots_members_once_and_reports_availability() {
     let mut app = app();
     identify(&mut app, "ada");

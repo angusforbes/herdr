@@ -572,7 +572,51 @@ pub(crate) fn agent_panel_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
     Rect::new(area.x, body_y, body_width, body_height)
 }
 
+/// Constant-time cached identity lookup, matching room membership without
+/// collecting/scanning members (this runs once per displayed sidebar row).
+fn room_agent_identity<'a>(
+    app: &'a AppState,
+    entry: &AgentPanelEntry,
+) -> Option<(&'a str, &'a str, usize)> {
+    let ws = app.workspaces.get(entry.ws_idx)?;
+    let number = *ws.public_pane_numbers.get(&entry.pane_id)?;
+    let pane = ws.tabs.get(entry.tab_idx)?.panes.get(&entry.pane_id)?;
+    let terminal = app.terminals.get(&pane.attached_terminal_id)?;
+    let label = terminal.effective_agent_label()?;
+    Some((
+        terminal.agent_name.as_deref().unwrap_or(label),
+        &ws.id,
+        number,
+    ))
+}
+
+fn agent_row_active(app: &AppState, entry: &AgentPanelEntry) -> bool {
+    if app.room_active() {
+        app.active == Some(entry.ws_idx) && room_agent_identity(app, entry).is_some()
+    } else {
+        app.is_active_pane(entry.ws_idx, entry.tab_idx, entry.pane_id)
+    }
+}
+
 fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<ResolvedToken>> {
+    if app.room_active() {
+        if let Some((name, workspace, number)) = room_agent_identity(app, entry) {
+            return vec![vec![
+                ResolvedToken {
+                    kind: ResolvedTokenKind::Workspace(name.to_owned()),
+                    style: Default::default(),
+                    rich: None,
+                },
+                ResolvedToken {
+                    kind: ResolvedTokenKind::Pane(crate::workspace::public_pane_id_for_number(
+                        workspace, number,
+                    )),
+                    style: Default::default(),
+                    rich: None,
+                },
+            ]];
+        }
+    }
     let label = entry
         .state_labels
         .get(agent_panel_status_key(entry.state, entry.seen))
@@ -883,7 +927,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
                 break;
             }
             let position = detail_idx + 1;
-            let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
+            let is_active = agent_row_active(app, detail);
             let position_style = if is_active {
                 Style::default().fg(p.text).bg(p.active_row_bg)
             } else {
@@ -1629,7 +1673,7 @@ fn render_agent_detail(
             break;
         }
 
-        let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
+        let is_active = agent_row_active(app, detail);
         let row_style = if is_active {
             Style::default().bg(p.active_row_bg)
         } else {
@@ -2509,6 +2553,112 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn room_sidebar_compacts_agents_highlights_current_members_and_restores_custom_rows() {
+        use crate::config::AgentSidebarToken as Token;
+        let (mut app, _, _) = collapsed_agent_app();
+        app.active = Some(0);
+        app.mode = Mode::Terminal;
+        let shell = app.workspaces[0].test_split(Direction::Horizontal);
+        app.ensure_test_terminals();
+        app.sidebar_agents.rows = vec![
+            vec![Token::Custom("topic".into())],
+            vec![Token::Custom("model".into()), Token::Custom("name".into())],
+        ];
+        for (i, terminal) in app.terminals.values_mut().enumerate() {
+            terminal.set_agent_name(format!("name-{i}"));
+            terminal.metadata_tokens.patch(
+                std::collections::HashMap::from([
+                    ("topic".into(), Some("CUSTOM-TOPIC".into())),
+                    ("model".into(), Some("CUSTOM-MODEL".into())),
+                    ("name".into(), terminal.agent_name.clone()),
+                ]),
+                None,
+                std::time::Instant::now(),
+            );
+        }
+        let area = Rect::new(0, 0, 50, 20);
+        let render = |app: &AppState| {
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_agent_detail(app, &TerminalRuntimeRegistry::new(), frame, area)
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let before = render(&app);
+        assert!(row_text(&before, 3, area.width).contains("CUSTOM-TOPIC"));
+        assert!(row_text(&before, 4, area.width).contains("CUSTOM-MODEL"));
+        app.select_room();
+        // Deliberately stale presentation cache: highlights must use current
+        // runtime identity, never a per-row search through this member vector.
+        app.room_ui.members.clear();
+        let buffer = render(&app);
+        let mut y = agent_panel_body_rect(area, false).y;
+        let entries = agent_panel_entries(&app);
+        let mut highlighted = 0;
+        for entry in &entries {
+            let member = room_agent_identity(&app, entry);
+            let expected = entry.ws_idx == 0 && entry.pane_id != shell;
+            assert_eq!(agent_row_active(&app, entry), expected);
+            assert_eq!(buffer[(0, y)].bg == app.palette.active_row_bg, expected);
+            highlighted += usize::from(expected);
+            if let Some((name, ws, number)) = member {
+                let text = row_text(&buffer, y, area.width);
+                assert!(text.contains(name));
+                assert!(text.contains(&crate::workspace::public_pane_id_for_number(ws, number)));
+                assert!(!text.contains("CUSTOM-"));
+                assert_eq!(agent_entry_height_in_body(&app, entry, area.height), 1);
+            }
+            y += agent_entry_height_in_body(&app, entry, area.height);
+        }
+        assert_eq!(
+            highlighted, 2,
+            "all current agents, not the focused named shell"
+        );
+        app.room_ui.visible = false;
+        assert_eq!(
+            render(&app),
+            before,
+            "normal topic/model/name styles must be unchanged"
+        );
+    }
+
+    #[test]
+    fn room_collapsed_sidebar_highlights_all_and_only_current_workspace_agents() {
+        let (mut app, _, second) = collapsed_agent_app();
+        app.active = Some(0);
+        app.select_room();
+        let area = Rect::new(0, 0, 4, 14);
+        let (_, _, detail_area) = collapsed_sidebar_sections(area);
+        let rows = collapsed_agent_row_styles(&app, area, detail_area, 3);
+        assert_eq!(
+            rows.iter()
+                .filter(|cells| cells
+                    .iter()
+                    .all(|style| style.bg == Some(app.palette.active_row_bg)))
+                .count(),
+            2
+        );
+        // Runtime identity can disappear without the cached room list refreshing.
+        let id = app.workspaces[0].terminal_id(second).unwrap().clone();
+        app.terminals
+            .get_mut(&id)
+            .unwrap()
+            .clear_agent_runtime_identity_after_respawn();
+        let entries = agent_panel_entries(&app);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| agent_row_active(&app, entry))
+                .count(),
+            1
+        );
+        app.workspaces[0].public_pane_numbers.clear();
+        assert!(entries.iter().all(|entry| !agent_row_active(&app, entry)));
     }
 
     #[test]

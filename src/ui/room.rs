@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 /// Geometry computation, not rendering. At unchanged width, only new messages
 /// are formatted/wrapped. Room history is bounded; resizing rebuilds this one
 /// active-room cache, never a pane-scaled loop and never any filesystem I/O.
-pub(super) fn compute_room_view(app: &mut AppState, area: Rect) {
+pub(super) fn compute_room_view(app: &mut AppState, area: Rect, terminal_height: u16) {
     if !app.room_active() {
         app.room_ui.selection = None;
         app.room_ui.composer_cursor = None;
@@ -22,10 +22,15 @@ pub(super) fn compute_room_view(app: &mut AppState, area: Rect) {
     };
     let ui = &mut app.room_ui;
     // Composer work is bounded by 8192 bytes, independent of history/panes.
-    ui.composer_rows = editor::rows(&ui.composer, area.width.saturating_sub(2) as usize);
-    let [_, _, transcript, _, composer] = room_areas(area, ui.composer_rows.len());
+    ui.composer_max_rows = (terminal_height as usize * 3 / 10).max(5);
+    ui.composer_rows = ui
+        .editor
+        .rows(&ui.composer, area.width.saturating_sub(1) as usize);
+    let [transcript, _, composer] = room_areas(area, ui);
     ui.transcript_area = transcript;
-    ui.composer_area = Block::default().borders(Borders::ALL).inner(composer);
+    ui.composer_area = Block::default()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .inner(composer);
     ui.composer_cursor = ui
         .editor
         .project(&ui.composer, &ui.composer_rows, ui.composer_area);
@@ -106,60 +111,21 @@ fn wrap_into(text: &str, width: usize, lines: &mut Vec<String>) {
     }
 }
 
-fn room_areas(area: Rect, composer_rows: usize) -> [Rect; 5] {
+fn room_areas(area: Rect, ui: &crate::app::room::RoomPresentation) -> [Rect; 3] {
+    let status_rows = u16::from(!ui.status.is_empty()) + u16::from(!ui.delivery_summary.is_empty());
     Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(3),
         Constraint::Min(1),
-        Constraint::Length(2),
-        Constraint::Length(composer_rows.clamp(1, 6) as u16 + 2),
+        Constraint::Length(status_rows),
+        Constraint::Length(
+            (ui.composer_rows.len().clamp(1, ui.composer_max_rows.max(1)) as u16).saturating_add(2),
+        ),
     ])
     .areas(area)
 }
 
 pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
     let ui = &app.room_ui;
-    let [header, members, transcript, status, composer] = room_areas(area, ui.composer_rows.len());
-    frame.render_widget(Paragraph::new("room · human owned · Pi delivery (at most once, 10 min)\nEsc: terminal · Tab: recipient · Enter: send · Shift+Enter: newline · ↑/↓: history · drag / Ctrl+C: copy")
-        .style(Style::default().fg(app.palette.accent)), header);
-    let selected = ui
-        .recipient
-        .as_ref()
-        .and_then(|selected| ui.members.iter().position(|m| m == selected));
-    let start = selected.unwrap_or(0).saturating_sub(1);
-    let mut lines = vec![Line::from(format!(
-        "Members: {} · {}",
-        ui.members.len(),
-        if ui.recipient.is_none() {
-            "recipient: all current members"
-        } else if selected.is_none() {
-            "recipient changed: select again (Tab)"
-        } else {
-            "one recipient (10 min)"
-        }
-    ))];
-    for member in ui.members.iter().skip(start).take(2) {
-        lines.push(Line::from(format!(
-            "{} {} · {} · {}",
-            if ui.recipient.as_ref() == Some(member) {
-                ">"
-            } else {
-                " "
-            },
-            member.name,
-            member.pane_id,
-            ui.receivers
-                .iter()
-                .find(|r| crate::room_delivery::same_identity(&r.member, member))
-                .map(|r| if r.available {
-                    "Pi receiver online"
-                } else {
-                    r.detail.as_deref().unwrap_or("unavailable")
-                })
-                .unwrap_or("checking receiver")
-        )));
-    }
-    frame.render_widget(Paragraph::new(lines), members);
+    let [transcript, status, composer] = room_areas(area, ui);
     let visible: Vec<_> = ui
         .transcript_lines
         .iter()
@@ -184,22 +150,64 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
         .collect();
     frame.render_widget(Paragraph::new(visible), transcript);
     frame.render_widget(
-        Paragraph::new(format!("{}\n{}", ui.status, ui.delivery_summary))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(
+            [&ui.status, &ui.delivery_summary]
+                .into_iter()
+                .filter(|line| !line.is_empty())
+                .map(|line| Line::from(line.as_str()))
+                .collect::<Vec<_>>(),
+        )
+        .style(Style::default().fg(app.palette.overlay0))
+        .wrap(Wrap { trim: false }),
         status,
     );
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("human question · Enter sends · Shift+Enter newline"),
-        composer,
-    );
+    if composer.height > 0 {
+        frame.render_widget(
+            Paragraph::new(scroll_border("↑", ui.editor.top, composer.width)),
+            Rect::new(composer.x, composer.y, composer.width, 1),
+        );
+    }
+    if composer.height > 1 {
+        let below = ui
+            .composer_rows
+            .len()
+            .saturating_sub(ui.editor.top + ui.composer_area.height as usize);
+        frame.render_widget(
+            Paragraph::new(scroll_border("↓", below, composer.width)),
+            Rect::new(composer.x, composer.bottom() - 1, composer.width, 1),
+        );
+    }
     let input: Vec<_> = ui
         .composer_rows
         .iter()
         .skip(ui.editor.top)
         .take(ui.composer_area.height as usize)
-        .map(|row| Line::from(&ui.composer[row.start..row.end]))
+        .map(|row| {
+            let cursor_row = editor::row_at(&ui.composer_rows, ui.editor.cursor);
+            if app.mode != Mode::Terminal || ui.composer_rows.get(cursor_row) != Some(row) {
+                return Line::from(&ui.composer[row.start..row.end]);
+            }
+            use unicode_segmentation::UnicodeSegmentation;
+            let cursor = ui.editor.cursor;
+            let end = cursor
+                + ui.composer[cursor..row.end]
+                    .graphemes(true)
+                    .next()
+                    .map(str::len)
+                    .unwrap_or(0);
+            Line::from(vec![
+                Span::raw(&ui.composer[row.start..cursor]),
+                Span::styled(
+                    if end == cursor {
+                        " "
+                    } else {
+                        &ui.composer[cursor..end]
+                    },
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ),
+                Span::raw(&ui.composer[end..row.end]),
+            ])
+        })
         .collect();
     frame.render_widget(Paragraph::new(input), ui.composer_area);
     if app.mode == Mode::Terminal {
@@ -209,9 +217,87 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
     }
 }
 
+fn scroll_border(direction: &str, hidden: usize, width: u16) -> String {
+    let width = width as usize;
+    if hidden == 0 {
+        return "─".repeat(width);
+    }
+    let label = format!(" {direction} {hidden} more ");
+    if label.width() + 2 <= width {
+        let left = (width - label.width()) / 2;
+        format!(
+            "{}{}{}",
+            "─".repeat(left),
+            label,
+            "─".repeat(width - label.width() - left)
+        )
+    } else {
+        let label = format!("───{label}");
+        let dots = ".".repeat(width.min(3));
+        let end = editor::byte_at_column(&label, width.saturating_sub(dots.len()));
+        format!("{}{dots}", &label[..end])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn room_render_is_only_conversation_optional_status_and_composer() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut app = AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("room")];
+        app.active = Some(0);
+        app.select_room();
+        app.room_ui.members.push(crate::room::Member {
+            pane_id: "w1:p1".into(),
+            terminal_id: "t1".into(),
+            agent: "pi".into(),
+            name: "hidden member listing".into(),
+            session: None,
+        });
+        app.room_ui.recipient = app.room_ui.members.first().cloned();
+        app.workspaces[0]
+            .room
+            .post("shared conversation".into(), None, 0)
+            .unwrap();
+        app.insert_room_text("draft");
+        let area = Rect::new(0, 0, 100, 20);
+        for status in ["", "write failed"] {
+            app.room_ui.status = status.into();
+            compute_room_view(&mut app, area, area.height);
+            assert_eq!(app.room_ui.transcript_area.y, area.y);
+            assert_eq!(app.room_ui.composer_area.bottom() + 1, area.bottom());
+            assert_eq!(
+                app.room_ui.transcript_area.height,
+                17 - u16::from(!status.is_empty())
+            );
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|frame| render_room(&app, frame, area))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(text.contains("shared conversation"));
+            assert!(text.contains("draft"));
+            assert!(text.contains(status));
+            for removed in [
+                "Members:",
+                "recipient",
+                "human owned",
+                "Tab:",
+                "hidden member listing",
+            ] {
+                assert!(!text.contains(removed), "unexpected room chrome: {removed}");
+            }
+        }
+    }
+
     #[test]
     fn room_wrapping_preserves_unicode_and_filters_control_sequences() {
         let mut lines = Vec::new();
@@ -235,22 +321,24 @@ mod tests {
             Rect::new(0, 0, 80, 40),
         ] {
             app.room_ui.scroll = usize::MAX;
-            compute_room_view(&mut app, area);
-            let max = app.room_ui.transcript_lines.len().saturating_sub(
-                room_areas(area, app.room_ui.composer_rows.len())[2].height as usize,
-            );
+            compute_room_view(&mut app, area, area.height);
+            let max = app
+                .room_ui
+                .transcript_lines
+                .len()
+                .saturating_sub(room_areas(area, &app.room_ui)[0].height as usize);
             assert_eq!(app.room_ui.scroll, max);
             app.workspaces[0]
                 .room
                 .post("new record".into(), None, 0)
                 .unwrap();
-            compute_room_view(&mut app, area);
+            compute_room_view(&mut app, area, area.height);
             assert_eq!(
                 app.room_ui.scroll, max,
                 "append must not revive old overscroll"
             );
         }
-        compute_room_view(&mut app, Rect::new(0, 0, 120, 200));
+        compute_room_view(&mut app, Rect::new(0, 0, 120, 200), 200);
         assert_eq!(
             app.room_ui.scroll, 0,
             "short transcript fits the tall viewport"
@@ -267,21 +355,21 @@ mod tests {
             .post("x".repeat(8192), None, 0)
             .unwrap();
         app.select_room();
-        compute_room_view(&mut app, Rect::new(0, 0, 80, 30));
+        compute_room_view(&mut app, Rect::new(0, 0, 80, 30), 30);
         let count = app.room_ui.transcript_lines.len();
         let pointer = app.room_ui.transcript_lines[0].as_ptr();
-        compute_room_view(&mut app, Rect::new(0, 0, 80, 30));
+        compute_room_view(&mut app, Rect::new(0, 0, 80, 30), 30);
         assert_eq!(app.room_ui.transcript_lines[0].as_ptr(), pointer);
         assert_eq!(app.room_ui.transcript_lines.len(), count);
         app.workspaces[0].room.post("last".into(), None, 0).unwrap();
-        compute_room_view(&mut app, Rect::new(0, 0, 80, 30));
+        compute_room_view(&mut app, Rect::new(0, 0, 80, 30), 30);
         assert_eq!(app.room_ui.transcript_lines[0].as_ptr(), pointer);
         assert!(app
             .room_ui
             .transcript_lines
             .iter()
             .any(|line| line == "last"));
-        compute_room_view(&mut app, Rect::new(0, 0, 20, 30));
+        compute_room_view(&mut app, Rect::new(0, 0, 20, 30), 30);
         assert!(app.room_ui.transcript_lines.len() > count);
     }
 }

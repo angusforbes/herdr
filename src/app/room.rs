@@ -22,6 +22,7 @@ pub struct RoomPresentation {
     pub composer: String,
     pub editor: editor::Editor,
     pub composer_rows: Vec<editor::Row>,
+    pub composer_max_rows: usize,
     pub composer_area: ratatui::layout::Rect,
     pub composer_cursor: Option<ratatui::layout::Position>,
     pub transcript_area: ratatui::layout::Rect,
@@ -30,6 +31,8 @@ pub struct RoomPresentation {
     pub members: Vec<Member>,
     pub receivers: Vec<crate::room_delivery::ReceiverStatus>,
     pub delivery_summary: String,
+    /// Legacy presentation value only; never used as a composer delivery target.
+    /// Cleared on send so an older client selection cannot survive a new post.
     pub recipient: Option<Member>,
     pub status: String,
     pub scroll: usize,
@@ -38,7 +41,7 @@ pub struct RoomPresentation {
 
 fn delivery_summary(deliveries: &[crate::room_delivery::DeliveryStatus]) -> String {
     let Some(sequence) = deliveries.last().map(|d| d.request_sequence) else {
-        return "No runtime deliveries (restart never replays history)".into();
+        return String::new();
     };
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     for delivery in deliveries.iter().filter(|d| d.request_sequence == sequence) {
@@ -161,8 +164,6 @@ impl App {
                 self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
-            // Keep a vanished selection as an invalid target: never silently turn an
-            // addressed request into an unaddressed post or target a replacement.
         }
         self.state.room_ui.refreshed = Some(now);
     }
@@ -197,40 +198,25 @@ impl App {
         if self.handle_panel_shortcut(key) {
             return true;
         }
+        let ui = &mut self.state.room_ui;
+        if ui.editor.jump_key(&ui.composer, key) {
+            return true;
+        }
+        if editor::handle_key(
+            &mut ui.editor,
+            &mut ui.composer,
+            key,
+            if ui.composer_area.width == 0 {
+                self.state.view.terminal_area.width.saturating_sub(1).max(1) as usize
+            } else {
+                ui.composer_area.width.saturating_sub(1).max(1) as usize
+            },
+            ui.composer_max_rows,
+        ) {
+            return true;
+        }
         match key.code {
             KeyCode::Esc => self.state.room_ui.visible = false,
-            KeyCode::Up if key.modifiers.is_empty() => {
-                self.state.room_ui.scroll = self.state.room_ui.scroll.saturating_add(1);
-            }
-            KeyCode::Down if key.modifiers.is_empty() => {
-                self.state.room_ui.scroll = self.state.room_ui.scroll.saturating_sub(1);
-            }
-            KeyCode::Left
-            | KeyCode::Right
-            | KeyCode::Home
-            | KeyCode::End
-            | KeyCode::Backspace
-            | KeyCode::Delete
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::CONTROL =>
-            {
-                let ui = &mut self.state.room_ui;
-                let control = key.modifiers == KeyModifiers::CONTROL;
-                match key.code {
-                    KeyCode::Left if control => ui.editor.word_left(&ui.composer),
-                    KeyCode::Left => ui.editor.left(&ui.composer),
-                    KeyCode::Right if control => ui.editor.word_right(&ui.composer),
-                    KeyCode::Right => ui.editor.right(&ui.composer),
-                    KeyCode::Home => ui.editor.home(&ui.composer, control),
-                    KeyCode::End => ui.editor.end(&ui.composer, control),
-                    KeyCode::Backspace => ui.editor.backspace(&mut ui.composer, control),
-                    KeyCode::Delete => ui.editor.delete(&mut ui.composer),
-                    _ => {}
-                }
-            }
-            KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
-                let ui = &mut self.state.room_ui;
-                ui.editor.backspace(&mut ui.composer, true);
-            }
             KeyCode::Char('c' | 'C')
                 if key.modifiers == KeyModifiers::CONTROL
                     || key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
@@ -246,34 +232,28 @@ impl App {
                     self.dispatch_pending_clipboard_write();
                 }
             }
-            KeyCode::PageUp => {
+            KeyCode::PageUp if key.modifiers.is_empty() => {
                 self.state.room_ui.scroll = self.state.room_ui.scroll.saturating_add(5)
             }
-            KeyCode::PageDown => {
+            KeyCode::PageDown if key.modifiers.is_empty() => {
                 self.state.room_ui.scroll = self.state.room_ui.scroll.saturating_sub(5)
             }
-            KeyCode::Tab => {
-                self.state.room_ui.status.clear();
-                let members = &self.state.room_ui.members;
-                let next = match self.state.room_ui.recipient.as_ref() {
-                    None => members.first(),
-                    Some(selected) => match members.iter().position(|m| m == selected) {
-                        Some(index) => members.get(index + 1),
-                        None => {
-                            self.state.room_ui.status =
-                                "Recipient changed; selection cleared to all. Tab to select one again.".into();
-                            None
-                        }
-                    },
-                };
-                self.state.room_ui.recipient = next.cloned();
+            // Consume unbound Tab keys: no recipient picker or hidden-pane focus.
+            // Configured global panel shortcuts have already been handled above.
+            KeyCode::Tab | KeyCode::BackTab => {}
+            KeyCode::Enter if key.modifiers.is_empty() => {
+                let ui = &mut self.state.room_ui;
+                ui.editor.normalize(&ui.composer);
+                if ui.composer[..ui.editor.cursor].ends_with('\\') {
+                    ui.editor.backspace(&mut ui.composer, false);
+                    ui.editor.type_text(&mut ui.composer, "\n");
+                } else {
+                    self.post_room_composer();
+                }
             }
-            KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => {
-                self.state.insert_room_text("\n");
-            }
-            KeyCode::Enter if key.modifiers.is_empty() => self.post_room_composer(),
-            KeyCode::Char('v')
-                if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+            KeyCode::Char('v' | 'V')
+                if key.modifiers == KeyModifiers::CONTROL
+                    || key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
             {
                 if let Some(text) = crate::platform::read_clipboard_text() {
                     self.state.insert_room_text(&text);
@@ -284,7 +264,8 @@ impl App {
                     KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
                 ) =>
             {
-                self.state.insert_room_text(&ch.to_string())
+                let ui = &mut self.state.room_ui;
+                ui.editor.type_text(&mut ui.composer, &ch.to_string());
             }
             _ => {}
         }
@@ -295,34 +276,21 @@ impl App {
         let Some(index) = self.state.active else {
             return;
         };
-        // Use the selected snapshot, not just its reused pane address.
-        if let Some(selected) = &self.state.room_ui.recipient {
-            let current = crate::room::members(&self.state, index);
-            if !current.iter().any(|m| m == selected) {
-                self.state.room_ui.status = "Recipient changed; select again. Nothing sent.".into();
-                return;
-            }
-            if selected.session.is_none() {
-                self.state.room_ui.status =
-                    "Recipient has no live session identity. Nothing sent.".into();
-                return;
-            }
-        }
+        // UI posts are always group questions, even with an old presentation
+        // target still present. Explicit targeting remains a neutral API feature.
+        self.state.room_ui.recipient = None;
         let response = self.dispatch_api_request(
             "room.composer",
             crate::api::schema::Method::RoomPost(crate::api::schema::RoomPostParams {
                 workspace_id: self.state.workspaces[index].id.clone(),
-                text: self.state.room_ui.composer.clone(),
-                recipient: self.state.room_ui.recipient.as_ref().and_then(|member| {
-                    member
-                        .session
-                        .as_ref()
-                        .map(|session| crate::api::schema::RoomRecipient {
-                            pane_id: member.pane_id.clone(),
-                            terminal_id: member.terminal_id.clone(),
-                            session: session.clone(),
-                        })
-                }),
+                text: self
+                    .state
+                    .room_ui
+                    .editor
+                    .expanded(&self.state.room_ui.composer)
+                    .trim()
+                    .to_owned(),
+                recipient: None,
             }),
         );
         match serde_json::from_str::<crate::api::schema::SuccessResponse>(&response) {
@@ -337,8 +305,8 @@ impl App {
                     },
                 ..
             }) => {
-                self.state.room_ui.composer.clear();
-                self.state.room_ui.editor = editor::Editor::default();
+                let ui = &mut self.state.room_ui;
+                ui.editor.sent(&mut ui.composer);
                 self.state.room_ui.scroll = 0;
                 self.state.room_ui.status = format!(
                     "#{sequence} {persistence} · {queued} queued · {unavailable} unavailable"
@@ -428,7 +396,10 @@ impl App {
                         // A batched paste/key may precede this click before the
                         // next frame. Recompute this bounded buffer, never index
                         // stale byte offsets into a newly edited draft.
-                        let rows = editor::rows(&ui.composer, ui.composer_area.width as usize);
+                        let rows = ui.editor.rows(
+                            &ui.composer,
+                            ui.composer_area.width.saturating_sub(1) as usize,
+                        );
                         let row =
                             ui.editor.top + position.y.saturating_sub(ui.composer_area.y) as usize;
                         if let Some(row) = rows.get(row) {
@@ -440,6 +411,7 @@ impl App {
                         } else {
                             ui.editor.cursor = ui.composer.len();
                         }
+                        ui.editor.clicked(&ui.composer);
                     }
                 }
                 _ => {}

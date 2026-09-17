@@ -122,7 +122,7 @@ pub(crate) fn tab_surface_cursor(
         return app.room_ui.composer_cursor.map(|position| CursorState {
             x: position.x,
             y: position.y,
-            visible: true,
+            visible: false,
             shape: 6,
         });
     }

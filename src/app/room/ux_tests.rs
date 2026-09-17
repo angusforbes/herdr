@@ -37,7 +37,7 @@ async fn room_text_cursor_keyboard_paste_and_send_through_app() {
             RawInputEvent::Paste("a界e\u{301}\r\nlast\rend\t\0".into()),
         )
         .await;
-        assert_eq!(app.state.room_ui.composer, "a界e\u{301}\nlast\nend");
+        assert_eq!(app.state.room_ui.composer, "a界e\u{301}\nlast\nend    ");
         let press = |code, modifiers| RawInputEvent::Key(TerminalKey::new(code, modifiers));
         for event in [
             press(KeyCode::Home, KeyModifiers::CONTROL),
@@ -50,8 +50,11 @@ async fn room_text_cursor_keyboard_paste_and_send_through_app() {
         ] {
             route_room_event(&mut app, local, event).await;
         }
-        assert_eq!(app.state.room_ui.composer, "a語\n\nlast\nend");
-        assert_eq!(app.state.room_ui.editor.cursor, "a語\n".len());
+        assert_eq!(app.state.room_ui.composer, "a界e\u{301}\nlast\ne語\n    ");
+        assert_eq!(
+            app.state.room_ui.editor.cursor,
+            "a界e\u{301}\nlast\ne語\n".len()
+        );
         route_room_event(&mut app, local, press(KeyCode::End, KeyModifiers::CONTROL)).await;
         route_room_event(
             &mut app,
@@ -59,12 +62,12 @@ async fn room_text_cursor_keyboard_paste_and_send_through_app() {
             press(KeyCode::Char('w'), KeyModifiers::CONTROL),
         )
         .await;
-        assert_eq!(app.state.room_ui.composer, "a語\n\nlast\n");
+        assert_eq!(app.state.room_ui.composer, "a界e\u{301}\nlast\ne語\n");
         route_room_event(&mut app, local, press(KeyCode::Home, KeyModifiers::NONE)).await;
         route_room_event(&mut app, local, press(KeyCode::Left, KeyModifiers::CONTROL)).await;
         assert_eq!(
             &app.state.room_ui.composer[app.state.room_ui.editor.cursor..],
-            "last\n"
+            "\n"
         );
         route_room_event(
             &mut app,
@@ -102,20 +105,37 @@ async fn room_app_paste_cap_is_grapheme_safe_at_insertion_cursor() {
     key(&mut app, KeyCode::Home, KeyModifiers::CONTROL);
     app.route_client_events(vec![RawInputEvent::Paste("e\u{301}界".into())], false);
     assert_eq!(
-        app.state.room_ui.composer.len(),
+        app.state
+            .room_ui
+            .editor
+            .expanded(&app.state.room_ui.composer)
+            .len(),
         crate::room::MAX_MESSAGE_BYTES - 2
     );
     assert_eq!(app.state.room_ui.editor.cursor, 0);
     app.handle_paste("é".into()).await;
     assert_eq!(
-        app.state.room_ui.composer.len(),
+        app.state
+            .room_ui
+            .editor
+            .expanded(&app.state.room_ui.composer)
+            .len(),
         crate::room::MAX_MESSAGE_BYTES
     );
     assert_eq!(app.state.room_ui.editor.cursor, 2);
-    assert!(app.state.room_ui.composer.starts_with("éx"));
+    assert!(app
+        .state
+        .room_ui
+        .editor
+        .expanded(&app.state.room_ui.composer)
+        .starts_with("éx"));
     app.handle_text_commit("👩‍💻".into()).await;
     assert_eq!(
-        app.state.room_ui.composer.len(),
+        app.state
+            .room_ui
+            .editor
+            .expanded(&app.state.room_ui.composer)
+            .len(),
         crate::room::MAX_MESSAGE_BYTES
     );
 }
@@ -157,21 +177,12 @@ async fn room_copy_preserves_wrap_newlines_and_excludes_chrome_and_controls() {
 #[tokio::test]
 async fn room_failed_send_preserves_cursor_and_multiline_draft() {
     let mut app = app();
-    identify(&mut app, "before");
     app.state.select_room();
-    app.state.room_ui.recipient = app.state.room_ui.members.first().cloned();
     app.state.insert_room_text("hello\nworld");
     key(&mut app, KeyCode::Home, KeyModifiers::NONE);
     let cursor = app.state.room_ui.editor.cursor;
-    identify(&mut app, "after");
-    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-    assert_eq!(app.state.room_ui.composer, "hello\nworld");
-    assert_eq!(app.state.room_ui.editor.cursor, cursor);
-    assert!(app.state.workspaces[0].room.messages.is_empty());
-    assert!(app.state.room_ui.status.contains("Recipient changed"));
     // Exercise the actual composer -> API -> persistence failure path without
     // filesystem writes or any global session configuration.
-    app.state.room_ui.recipient = None;
     app.session_save_thread = Some(std::thread::spawn(|| {
         panic!("injected prior writer failure")
     }));
@@ -305,7 +316,8 @@ async fn room_selection_scroll_clamp_resize_and_chrome_ownership() {
     let cursor = app.state.room_ui.editor.cursor;
     key(&mut app, KeyCode::Up, KeyModifiers::NONE);
     geometry(&mut app);
-    assert_eq!(app.state.room_ui.scroll, 1);
+    assert_eq!(app.state.room_ui.scroll, 0);
+    assert_eq!(app.state.room_ui.editor.cursor, 0);
     key(&mut app, KeyCode::Down, KeyModifiers::NONE);
     geometry(&mut app);
     assert_eq!(app.state.room_ui.scroll, 0);
@@ -369,10 +381,20 @@ async fn room_composer_mouse_caret_render_and_bounded_multiline_view() {
     )
     .unwrap();
     assert_eq!((cursor.x, cursor.y, cursor.shape), (area.x + 2, area.y, 6));
+    assert!(
+        !cursor.visible,
+        "hardware cursor hidden; position retained for IME"
+    );
+    assert!(terminal.backend().buffer()[(area.x + 2, area.y)]
+        .modifier
+        .contains(Modifier::REVERSED));
     key(&mut app, KeyCode::End, KeyModifiers::CONTROL);
-    app.state.insert_room_text("\n1\n2\n3\n4\n5\n6\n7\n8");
+    app.state.room_ui.editor.type_text(
+        &mut app.state.room_ui.composer,
+        "\n1\n2\n3\n4\n5\n6\n7\n8\n9",
+    );
     geometry(&mut app);
-    assert_eq!(app.state.room_ui.composer_area.height, 6);
+    assert_eq!(app.state.room_ui.composer_area.height, 9);
     assert!(app.state.room_ui.editor.top > 0);
     let area = app.state.room_ui.composer_area;
     assert_eq!(
@@ -380,6 +402,9 @@ async fn room_composer_mouse_caret_render_and_bounded_multiline_view() {
         Some(Position::new(area.x + 1, area.bottom() - 1))
     );
     key(&mut app, KeyCode::Home, KeyModifiers::CONTROL);
+    for _ in 0..9 {
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+    }
     geometry(&mut app);
     assert_eq!(app.state.room_ui.editor.top, 0);
     assert_eq!(app.state.room_ui.composer_cursor, Some(area.as_position()));
