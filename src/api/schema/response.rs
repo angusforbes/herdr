@@ -42,7 +42,21 @@ pub struct ErrorBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
+    RoomDeliveryRegistered {
+        receiver_id: String,
+        server_epoch: String,
+    },
+    RoomDeliveryClaimed {
+        delivery: Option<crate::room_delivery::Delivery>,
+    },
+    RoomDeliveryReported {
+        accepted: bool,
+    },
     RoomInfo {
+        #[serde(default)]
+        deliveries: Vec<crate::room_delivery::DeliveryStatus>,
+        #[serde(default)]
+        receivers: Vec<crate::room_delivery::ReceiverStatus>,
         room_id: String,
         workspace_id: String,
         members: Vec<crate::room::Member>,
@@ -55,6 +69,10 @@ pub enum ResponseResult {
         next_sequence: u64,
     },
     RoomWritten {
+        #[serde(default)]
+        queued: usize,
+        #[serde(default)]
+        unavailable: usize,
         room_id: String,
         sequence: u64,
         persistence: String,

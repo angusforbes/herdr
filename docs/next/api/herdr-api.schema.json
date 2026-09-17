@@ -2333,6 +2333,14 @@
           ],
           "type": "string"
         },
+        "Outcome": {
+          "enum": [
+            "submitted",
+            "unanswered",
+            "failed"
+          ],
+          "type": "string"
+        },
         "OutputMatch": {
           "oneOf": [
             {
@@ -3647,6 +3655,82 @@
           ],
           "type": "string"
         },
+        "RoomDeliveryClaimParams": {
+          "properties": {
+            "ready": {
+              "type": "boolean"
+            },
+            "receiver_id": {
+              "type": "string"
+            },
+            "server_epoch": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receiver_id",
+            "server_epoch",
+            "ready"
+          ],
+          "type": "object"
+        },
+        "RoomDeliveryRegisterParams": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "receiver_nonce": {
+              "type": "string"
+            },
+            "session": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "pane_id",
+            "terminal_id",
+            "session",
+            "receiver_nonce"
+          ],
+          "type": "object"
+        },
+        "RoomDeliveryReportParams": {
+          "properties": {
+            "delivery_id": {
+              "type": "string"
+            },
+            "detail": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "outcome": {
+              "$ref": "#/schemas/request/$defs/Outcome"
+            },
+            "receiver_id": {
+              "type": "string"
+            },
+            "server_epoch": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receiver_id",
+            "server_epoch",
+            "delivery_id",
+            "outcome"
+          ],
+          "type": "object"
+        },
         "RoomPostParams": {
           "properties": {
             "recipient": {
@@ -3659,7 +3743,7 @@
                 }
               ],
               "default": null,
-              "description": "Optional pane in this workspace. Records a manual-pull request only."
+              "description": "Exact current recipient; omitted means all current members, captured once."
             },
             "text": {
               "type": "string"
@@ -4749,6 +4833,54 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/RoomReplyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "room.delivery.register",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RoomDeliveryRegisterParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "room.delivery.claim",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RoomDeliveryClaimParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "room.delivery.report",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RoomDeliveryReportParams"
             }
           },
           "required": [
@@ -6523,6 +6655,72 @@
           ],
           "type": "string"
         },
+        "Delivery": {
+          "properties": {
+            "delivery_id": {
+              "type": "string"
+            },
+            "expires_unix": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "recipient": {
+              "$ref": "#/schemas/success_response/$defs/Member"
+            },
+            "request_sequence": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "delivery_id",
+            "workspace_id",
+            "request_sequence",
+            "recipient",
+            "text",
+            "expires_unix"
+          ],
+          "type": "object"
+        },
+        "DeliveryStatus": {
+          "properties": {
+            "delivery_id": {
+              "type": "string"
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "recipient": {
+              "$ref": "#/schemas/success_response/$defs/Member"
+            },
+            "request_sequence": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "$ref": "#/schemas/success_response/$defs/Status"
+            }
+          },
+          "required": [
+            "delivery_id",
+            "request_sequence",
+            "recipient",
+            "status"
+          ],
+          "type": "object"
+        },
         "EventData": {
           "oneOf": [
             {
@@ -7534,7 +7732,16 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "description": "Legacy single-recipient representation, retained for saved transcripts."
+            },
+            "recipients": {
+              "default": [],
+              "description": "Immutable audience captured when a human question is accepted.",
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/Member"
+              },
+              "type": "array"
             },
             "reply_to": {
               "format": "uint64",
@@ -8881,10 +9088,96 @@
           ],
           "type": "string"
         },
+        "ReceiverStatus": {
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "member": {
+              "$ref": "#/schemas/success_response/$defs/Member"
+            }
+          },
+          "required": [
+            "member",
+            "available"
+          ],
+          "type": "object"
+        },
         "ResponseResult": {
           "oneOf": [
             {
               "properties": {
+                "receiver_id": {
+                  "type": "string"
+                },
+                "server_epoch": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "room_delivery_registered",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "receiver_id",
+                "server_epoch"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "delivery": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/Delivery"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "room_delivery_claimed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "accepted": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "room_delivery_reported",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "accepted"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "deliveries": {
+                  "default": [],
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/DeliveryStatus"
+                  },
+                  "type": "array"
+                },
                 "members": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/Member"
@@ -8898,6 +9191,13 @@
                 },
                 "outbound_delivery": {
                   "type": "string"
+                },
+                "receivers": {
+                  "default": [],
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/ReceiverStatus"
+                  },
+                  "type": "array"
                 },
                 "room_id": {
                   "type": "string"
@@ -8957,6 +9257,12 @@
                 "persistence": {
                   "type": "string"
                 },
+                "queued": {
+                  "default": 0,
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "room_id": {
                   "type": "string"
                 },
@@ -8968,6 +9274,12 @@
                 "type": {
                   "const": "room_written",
                   "type": "string"
+                },
+                "unavailable": {
+                  "default": 0,
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
                 }
               },
               "required": [
@@ -10241,6 +10553,19 @@
           "enum": [
             "right",
             "down"
+          ],
+          "type": "string"
+        },
+        "Status": {
+          "enum": [
+            "queued",
+            "claimed",
+            "submitted",
+            "replied",
+            "unanswered",
+            "failed",
+            "unavailable",
+            "expired"
           ],
           "type": "string"
         },

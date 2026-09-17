@@ -101,6 +101,7 @@ impl PaneClickState {
 
 pub struct App {
     pub state: AppState,
+    pub(crate) room_delivery: crate::room_delivery::Runtime,
     pub(crate) pane_graphics: pane_graphics::Runtime,
     pub(crate) pane_graphics_files: Arc<crate::pane_graphics_files::FileStore>,
     pub(crate) direct_graphics_available: bool,
@@ -753,6 +754,7 @@ impl App {
             copy_feedback_deadline: None,
             last_api_notification_at: None,
             state,
+            room_delivery: crate::room_delivery::Runtime::default(),
             pane_graphics: pane_graphics::Runtime::default(),
             pane_graphics_files: Arc::new(crate::pane_graphics_files::FileStore::default()),
             direct_graphics_available: false,

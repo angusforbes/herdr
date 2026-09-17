@@ -148,3 +148,53 @@ Sole-writer follow-up on the existing prototype in `/home/agf/Work/herdr-rooms`,
 ### Parent verification after review fixes — Aporia
 
 Inspected key-release routing and stale-recipient handling after fixes. Independently reran 26 room tests and 5 Python helper/restart tests: all passed. Full final nextest run: 3550 tests, 3542 passed, the same 8 baseline failures, 1 ignored benchmark. Log: `/tmp/rooms-parent-final-tests.log`. `git diff --check` passed. No physical TUI validation, commit of room changes, install, or deployment yet. Passive/manual-pull limitation remains: this is not yet automatic group chat.
+
+### 2026-09-17 — roomchat-api: Rust runtime delivery/API/UI (uncommitted)
+
+Scope: `/home/agf/Work/herdr-rooms` at local `5be9c40`, preserving the parent's uncommitted group-domain work in `src/room.rs` (only cargo-formatting it) and the user's disposable-runner mode change. This writer did not edit `integrations/room`, the original checkout or global config, spawn agents, commit, push, install or deploy. The parallel adapter writer owns integration files; parent owns actual-model/physical-UI integration.
+
+**Implemented:** volatile `App::room_delivery` inbox, exact `room.delivery.register/claim/report` JSON contract, current live workspace/pane/terminal/session validation, 15-second receiver heartbeat TTL, one active claimed/submitted slot per receiver, mark-before-response claims (never reoffered after uncertain response), no implicit retry, reply/unanswered/failed slot release, and expiry/receiver/workspace cleanup. Registration/reads/join/restart never build work from history. Replacement receiver tokens invalidate old pending work rather than transferring it. Delivery status is runtime-only and lost on restart/handoff.
+
+Human `room.post` now defaults to a once-captured group audience. Explicit recipients retain current-session validation and legacy single-recipient storage; broadcast storage uses the parent's `recipients` domain field and per-terminal/session reply dedup. Only successful candidate persistence creates inbox entries. All visible members get queued or explicit unavailable status (no live session, unsupported agent or offline receiver); only live Pi receivers queue. Persisted `room.reply` updates matching terminal/session delivery status, including a same-workspace pane move; failed persistence leaves status/active slot untouched. No PTY injection or network/filesystem work was added to rendering.
+
+The room client defaults to all, shows real queued/unavailable counts, latest-request status counts/detail, and Pi receiver availability; stale explicit target and existing input/release isolation remain. Presentation updates are cached outside render (visible-room refresh, at most four times/second). Shared facts remain in the server runtime/API; only presentation projections are in `room_ui`.
+
+**Bounds/limitations:** 1024 live receiver registrations; 8192 delivery records across workspaces, checked before saving a post; records retained until ten minutes after request expiry; details capped at 512 non-control characters, nonce at 256 bytes. Cleanup is lazy on room delivery/get/post/reply operations and visible-room refresh. No persistent inbox, replay, retries, post idempotency key, per-agent security boundary, fsync guarantee, or support beyond explicitly enabled Pi polling. UUIDv8 correlation tokens use std random hash seeds plus the existing SHA-256 library (no new dependency). The receiver must continue heartbeating while busy and must not accept another turn until settled even if the reply tool has already cleared the server slot. `submitted` is an adapter report, not proof of a model response. No contract shape deviation; response types are `room_delivery_registered`, `room_delivery_claimed`, `room_delivery_reported`. JSON API additions require no binary TUI protocol bump.
+
+**Exact files owned by this writer:**
+- New: `src/room_delivery.rs`, `src/room_delivery/tests.rs`, `src/app/room/delivery_tests.rs`.
+- Modified: `src/main.rs`, `src/app/mod.rs`, `src/app/api.rs`, `src/app/api/rooms.rs`, `src/app/room.rs`, `src/app/room/tests.rs`, `src/ui/room.rs`, `src/api/schema.rs`, `src/api/schema/rooms.rs`, `src/api/schema/response.rs`, `src/api/server.rs`.
+- Generated/docs: `docs/next/api/herdr-api.schema.json`, `docs/next/rooms-prototype.md`, this `HANDOFF.md`.
+- `src/room.rs`: cargo-format only over parent's pre-existing domain changes; no logic edits by this writer.
+
+**Focused verification:** `just test-one room`: **42 passed** (parent's 28 plus 14 delivery/API tests). Covers broadcast/target capture, later joiners/offline/unsupported visibility, claim-at-most-once, heartbeat/readiness, active/submitted slots, terminal reports, bounded detail/capacity, expiry cleanup, registration replacement, session invalidation, same-workspace reply correlation, schema request shapes, restart/read/join non-replay, both post and reply save failure, existing legacy snapshot/reply dedup and input isolation. Generated-schema test: **1 passed** after regeneration and again without update mode. `cargo fmt --check` and `git diff --check`: passed. `just lint` attempted: blocked by the same six previously documented Rust-1.98 Clippy diagnostics (three chunks_exact sites, byte_char_slices, some_filter, field_reassign_with_default); no new diagnostic appeared. No broad suite, render benchmark, actual model, live user session or physical UI run by this writer.
+
+Commands (one line each, using HANDOFF-pinned tools):
+
+```sh
+mise x just@1.58.0 zig@0.15.2 aqua:nextest-rs/nextest/cargo-nextest@0.9.144 -- just test-one room
+```
+
+```sh
+mise x just@1.58.0 zig@0.15.2 aqua:nextest-rs/nextest/cargo-nextest@0.9.144 -- just test-one generated_protocol_schema_artifact_is_current
+```
+
+```sh
+mise x zig@0.15.2 -- cargo build --locked
+```
+
+Parent: use the rebuilt `target/debug/herdr` with the parallel adapter's disposable smoke launcher. Parent reports 11 Node and 7 Python adapter tests passed separately; those are not this writer's verification. Actual-model smoke and independent adapter review remain parent-owned; do not infer end-to-end success from these Rust receipts.
+
+### Parent actual-model verification — Aporia
+
+Rebuilt candidate from roomchat-api was exercised with two real Pi TUIs, isolated private configuration, and anthropic/claude-haiku-4-5. `python3 integrations/room/smoke.py --provider anthropic --model claude-haiku-4-5 --timeout 150` PASSED: broadcast produced two persisted attributed replies, target produced exactly one, replies arrived before room API reads, and repeated reads did not replay/fan out. Initial attempts using openai-codex/gpt-5.4-mini failed because that model is listed but rejected for this ChatGPT account; captured agent error confirmed the cause, while Haiku replied successfully. No credentials or debug sessions retained.
+
+Parent independently reran 11 JS and 7 Python tests (all passed). Full nextest: 3566 tests, 3558 passed, same eight baseline failures, 1 skipped. Log `/tmp/roomchat-parent-tests.log`. Independent adapter/server reviews still pending at this writing. No implementation commit, deployment, or physical UI validation yet.
+
+### Parent adapter-review resolution
+
+Fixed reviewer cfa2fc77 findings 1/2: unrelated agent_settled does not invalidate an idle in-flight claim; undispatched jobs cannot be mislabeled unanswered, and active state is cleared even when failure-report outcome is unknown. Two new deterministic regressions pass (13 JS tests total). Actual two-Haiku smoke rerun passed again. Finding 3 (frozen receiver after uncertain submitted report even if reply later saves) remains the explicit conservative policy requiring /reload, not automatic recovery: a generic unfreeze could also clear unrelated session/heartbeat faults. Server review still pending.
+
+### Final server review disposition — Aporia
+
+Review 2ebb4a70 complete. Corrected delivery-capacity wording to state retained history (including completed entries) lasts up to 20 minutes, rather than promising space at request expiry. Kept the intentional bounded history cap. Room summary now prefixes earlier pending delivery count, so posting another question does not hide previous queued/claimed/submitted work; new regression test passes. Unavailable-to-Replied is intentional: direct manual replies are valid with original captured identity/expiry, even without automatic receiver support. Reviewer did not audit all wire schema or pre-existing room tests; real socket smoke and automated suite cover those separately, not an exhaustive review claim. All 43 room tests pass after fixes; debug binary rebuilt; diff check clean. Both independent reviews complete. New code remains uncommitted and undeployed pending approval.

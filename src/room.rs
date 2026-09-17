@@ -22,7 +22,11 @@ pub struct Message {
     pub created_unix: u64,
     /// None denotes the human owner, never a coordinator agent.
     pub author: Option<Member>,
+    /// Legacy single-recipient representation, retained for saved transcripts.
     pub recipient: Option<Member>,
+    /// Immutable audience captured when a human question is accepted.
+    #[serde(default)]
+    pub recipients: Vec<Member>,
     pub reply_to: Option<u64>,
     pub expires_unix: Option<u64>,
 }
@@ -81,6 +85,38 @@ impl Room {
             created_unix: now,
             author: None,
             recipient,
+            recipients: Vec::new(),
+            reply_to: None,
+            expires_unix,
+        })
+    }
+
+    /// A group question is one transcript record, not one copy per recipient.
+    pub fn post_to(
+        &mut self,
+        text: String,
+        recipients: Vec<Member>,
+        now: u64,
+    ) -> Result<u64, String> {
+        if recipients.iter().any(|member| member.session.is_none()) {
+            return Err("recipient has no live session identity".into());
+        }
+        let mut audience: Vec<Member> = Vec::new();
+        for member in recipients {
+            if !audience.iter().any(|existing| {
+                existing.terminal_id == member.terminal_id && existing.session == member.session
+            }) {
+                audience.push(member);
+            }
+        }
+        let expires_unix = (!audience.is_empty()).then(|| now.saturating_add(REQUEST_TTL_SECONDS));
+        self.append(Message {
+            sequence: 0,
+            text,
+            created_unix: now,
+            author: None,
+            recipient: None,
+            recipients: audience,
             reply_to: None,
             expires_unix,
         })
@@ -98,16 +134,21 @@ impl Room {
             .iter()
             .find(|m| m.sequence == request)
             .ok_or("unknown request")?;
-        let recipient = original
-            .recipient
-            .as_ref()
-            .ok_or("message is not an addressed request")?;
+        if original.recipient.is_none() && original.recipients.is_empty() {
+            return Err("message is not an addressed request".into());
+        }
         if original.author.is_some() || original.reply_to.is_some() {
             return Err("cannot reply to a reply".into());
         }
-        if recipient.terminal_id != member.terminal_id
-            || recipient.session != member.session
-            || member.session.is_none()
+        if member.session.is_none()
+            || !original
+                .recipients
+                .iter()
+                .chain(original.recipient.iter())
+                .any(|recipient| {
+                    recipient.terminal_id == member.terminal_id
+                        && recipient.session == member.session
+                })
         {
             return Err("wrong recipient session".into());
         }
@@ -115,8 +156,13 @@ impl Room {
         if now >= expires {
             return Err("request expired".into());
         }
-        if self.messages.iter().any(|m| m.reply_to == Some(request)) {
-            return Err("request already has a reply".into());
+        if self.messages.iter().any(|m| {
+            m.reply_to == Some(request)
+                && m.author.as_ref().is_some_and(|author| {
+                    author.terminal_id == member.terminal_id && author.session == member.session
+                })
+        }) {
+            return Err("request already has a reply from this session".into());
         }
         // Capture the current author once. Future renames/moves never rewrite history.
         self.append(Message {
@@ -125,6 +171,7 @@ impl Room {
             created_unix: now,
             author: Some(member),
             recipient: None,
+            recipients: Vec::new(),
             reply_to: Some(request),
             expires_unix: None,
         })
@@ -202,6 +249,57 @@ mod tests {
         let restored: Room = serde_json::from_str(&serde_json::to_string(&room).unwrap()).unwrap();
         assert_eq!(restored, room);
     }
+    #[test]
+    fn room_group_question_snapshots_audience_and_deduplicates_per_session() {
+        let mut room = Room::default();
+        let ada = member();
+        let mut bob = member();
+        bob.name = "Bob".into();
+        bob.terminal_id = "t2".into();
+        bob.session = Some("session-b".into());
+        let request = room
+            .post_to(
+                "everyone?".into(),
+                vec![ada.clone(), bob.clone(), ada.clone()],
+                100,
+            )
+            .unwrap();
+        assert_eq!(room.messages.len(), 1);
+        assert_eq!(room.messages[0].recipients, vec![ada.clone(), bob.clone()]);
+        assert!(room
+            .reply(request, ada.clone(), "Ada here".into(), 101)
+            .is_ok());
+        assert!(room.reply(request, bob, "Bob here".into(), 102).is_ok());
+        assert!(room.reply(request, ada, "duplicate".into(), 103).is_err());
+        let mut newcomer = member();
+        newcomer.terminal_id = "t3".into();
+        assert!(room
+            .reply(request, newcomer, "not addressed".into(), 104)
+            .is_err());
+        assert_eq!(room.messages.len(), 3);
+        assert!(room.messages[1..]
+            .iter()
+            .all(|m| m.recipients.is_empty() && m.recipient.is_none()));
+        let restored: Room = serde_json::from_str(&serde_json::to_string(&room).unwrap()).unwrap();
+        assert_eq!(restored, room);
+    }
+
+    #[test]
+    fn room_legacy_transcript_without_audience_still_accepts_its_recipient() {
+        let mut room = Room::default();
+        room.post("old request".into(), Some(member()), 100)
+            .unwrap();
+        let mut json = serde_json::to_value(room).unwrap();
+        json["messages"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("recipients");
+        let mut restored: Room = serde_json::from_value(json).unwrap();
+        assert!(restored
+            .reply(1, member(), "legacy reply".into(), 101)
+            .is_ok());
+    }
+
     #[test]
     fn room_request_without_expiry_fails_closed() {
         let mut room = Room::default();

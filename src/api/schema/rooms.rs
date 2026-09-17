@@ -14,7 +14,7 @@ pub struct RoomReadParams {
 pub struct RoomPostParams {
     pub workspace_id: String,
     pub text: String,
-    /// Optional pane in this workspace. Records a manual-pull request only.
+    /// Exact current recipient; omitted means all current members, captured once.
     #[serde(default)]
     pub recipient: Option<RoomRecipient>,
 }
@@ -34,4 +34,30 @@ pub struct RoomReplyParams {
     pub terminal_id: String,
     pub session: String,
     pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RoomDeliveryRegisterParams {
+    pub workspace_id: String,
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub session: String,
+    pub receiver_nonce: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RoomDeliveryClaimParams {
+    pub receiver_id: String,
+    pub server_epoch: String,
+    pub ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RoomDeliveryReportParams {
+    pub receiver_id: String,
+    pub server_epoch: String,
+    pub delivery_id: String,
+    pub outcome: crate::room_delivery::Outcome,
+    #[serde(default)]
+    pub detail: Option<String>,
 }

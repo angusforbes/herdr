@@ -19,10 +19,66 @@ pub struct RoomPresentation {
     pub transcript_messages: usize,
     pub composer: String,
     pub members: Vec<Member>,
+    pub receivers: Vec<crate::room_delivery::ReceiverStatus>,
+    pub delivery_summary: String,
     pub recipient: Option<Member>,
     pub status: String,
     pub scroll: usize,
     refreshed: Option<std::time::Instant>,
+}
+
+fn delivery_summary(deliveries: &[crate::room_delivery::DeliveryStatus]) -> String {
+    let Some(sequence) = deliveries.last().map(|d| d.request_sequence) else {
+        return "No runtime deliveries (restart never replays history)".into();
+    };
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+    for delivery in deliveries.iter().filter(|d| d.request_sequence == sequence) {
+        use crate::room_delivery::Status::*;
+        let label = match delivery.status {
+            Queued => "queued",
+            Claimed => "claimed",
+            Submitted => "submitted",
+            Replied => "replied",
+            Unanswered => "unanswered",
+            Failed => "failed",
+            Unavailable => "unavailable",
+            Expired => "expired",
+        };
+        *counts.entry(label).or_default() += 1;
+    }
+    let summary = counts
+        .iter()
+        .map(|(label, count)| format!("{count} {label}"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let detail = deliveries
+        .iter()
+        .rev()
+        .filter(|d| d.request_sequence == sequence)
+        .find_map(|d| {
+            d.detail
+                .as_ref()
+                .map(|detail| format!(" · {}: {detail}", d.recipient.name))
+        })
+        .unwrap_or_default();
+    let earlier_pending = deliveries
+        .iter()
+        .filter(|d| {
+            d.request_sequence != sequence
+                && matches!(
+                    d.status,
+                    crate::room_delivery::Status::Queued
+                        | crate::room_delivery::Status::Claimed
+                        | crate::room_delivery::Status::Submitted
+                )
+        })
+        .count();
+    let backlog = if earlier_pending > 0 {
+        format!("Earlier requests: {earlier_pending} pending · ")
+    } else {
+        String::new()
+    };
+    format!("{backlog}#{sequence}: {summary}{detail}")
 }
 
 impl AppState {
@@ -82,10 +138,20 @@ impl App {
         {
             return;
         }
+        self.cleanup_room_delivery(crate::room_delivery::now());
         if let Some(index) = self.state.active {
             let members = crate::room::members(&self.state, index);
-            if members != self.state.room_ui.members {
+            let workspace = &self.state.workspaces[index].id;
+            let receivers = self.room_delivery.receivers(workspace, &members);
+            let deliveries = self.room_delivery.deliveries(workspace);
+            let delivery_summary = delivery_summary(&deliveries);
+            if members != self.state.room_ui.members
+                || receivers != self.state.room_ui.receivers
+                || delivery_summary != self.state.room_ui.delivery_summary
+            {
                 self.state.room_ui.members = members;
+                self.state.room_ui.receivers = receivers;
+                self.state.room_ui.delivery_summary = delivery_summary;
                 self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
@@ -145,7 +211,7 @@ impl App {
                         Some(index) => members.get(index + 1),
                         None => {
                             self.state.room_ui.status =
-                                "Recipient changed; selection cleared to none. Tab to select again.".into();
+                                "Recipient changed; selection cleared to all. Tab to select one again.".into();
                             None
                         }
                     },
@@ -212,14 +278,19 @@ impl App {
                     crate::api::schema::ResponseResult::RoomWritten {
                         persistence,
                         sequence,
+                        queued,
+                        unavailable,
                         ..
                     },
                 ..
             }) => {
                 self.state.room_ui.composer.clear();
                 self.state.room_ui.scroll = 0;
-                self.state.room_ui.status =
-                    format!("#{sequence} {persistence}. No prompt dispatched.");
+                self.state.room_ui.status = format!(
+                    "#{sequence} {persistence} · {queued} queued · {unavailable} unavailable"
+                );
+                self.state.room_ui.refreshed = None;
+                self.refresh_room_members();
             }
             _ => {
                 self.state.room_ui.status =

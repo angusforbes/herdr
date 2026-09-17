@@ -73,6 +73,12 @@ pub enum Method {
     RoomPost(RoomPostParams),
     #[serde(rename = "room.reply")]
     RoomReply(RoomReplyParams),
+    #[serde(rename = "room.delivery.register")]
+    RoomDeliveryRegister(RoomDeliveryRegisterParams),
+    #[serde(rename = "room.delivery.claim")]
+    RoomDeliveryClaim(RoomDeliveryClaimParams),
+    #[serde(rename = "room.delivery.report")]
+    RoomDeliveryReport(RoomDeliveryReportParams),
     #[serde(rename = "workspace.create")]
     WorkspaceCreate(WorkspaceCreateParams),
     #[serde(rename = "workspace.list")]

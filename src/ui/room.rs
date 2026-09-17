@@ -32,17 +32,21 @@ pub(super) fn compute_room_view(app: &mut AppState, area: Rect) {
             .as_ref()
             .map(|member| format!("{} ({})", member.name, member.pane_id))
             .unwrap_or_else(|| "human".into());
-        let destination = message
-            .recipient
-            .as_ref()
-            .map(|m| {
-                format!(
-                    " → {} [manual only; expires {}]",
-                    m.name,
-                    message.expires_unix.unwrap_or(0)
-                )
-            })
-            .unwrap_or_default();
+        let audience: Vec<_> = message
+            .recipients
+            .iter()
+            .chain(message.recipient.iter())
+            .map(|m| m.name.as_str())
+            .collect();
+        let destination = if audience.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " → {} [expires {}]",
+                audience.join(", "),
+                message.expires_unix.unwrap_or(0)
+            )
+        };
         let correlation = message
             .reply_to
             .map(|n| format!(" · reply to #{n}"))
@@ -101,7 +105,7 @@ fn room_areas(area: Rect) -> [Rect; 5] {
 pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
     let ui = &app.room_ui;
     let [header, members, transcript, status, composer] = room_areas(area);
-    frame.render_widget(Paragraph::new("room · human owned · outbound prompting DISABLED\nCtrl+Alt+R / Esc: terminal · Tab: recipient · Enter: record · PgUp/PgDn: history")
+    frame.render_widget(Paragraph::new("room · human owned · Pi delivery (at most once, 10 min)\nCtrl+Alt+R / Esc: terminal · Tab: all / one recipient · Enter: send · PgUp/PgDn: history")
         .style(Style::default().fg(app.palette.accent)), header);
     let selected = ui
         .recipient
@@ -112,11 +116,11 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
         "Members: {} · {}",
         ui.members.len(),
         if ui.recipient.is_none() {
-            "recipient: none (note only)"
+            "recipient: all current members"
         } else if selected.is_none() {
             "recipient changed: select again (Tab)"
         } else {
-            "one recipient (manual read/reply only, 10 min)"
+            "one recipient (10 min)"
         }
     ))];
     for member in ui.members.iter().skip(start).take(2) {
@@ -129,11 +133,15 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
             },
             member.name,
             member.pane_id,
-            if member.session.is_some() {
-                "session identified"
-            } else {
-                "no live session; cannot address"
-            }
+            ui.receivers
+                .iter()
+                .find(|r| crate::room_delivery::same_identity(&r.member, member))
+                .map(|r| if r.available {
+                    "Pi receiver online"
+                } else {
+                    r.detail.as_deref().unwrap_or("unavailable")
+                })
+                .unwrap_or("checking receiver")
         )));
     }
     frame.render_widget(Paragraph::new(lines), members);
@@ -149,7 +157,8 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
         .collect();
     frame.render_widget(Paragraph::new(visible), transcript);
     frame.render_widget(
-        Paragraph::new(ui.status.as_str()).wrap(Wrap { trim: false }),
+        Paragraph::new(format!("{}\n{}", ui.status, ui.delivery_summary))
+            .wrap(Wrap { trim: false }),
         status,
     );
     let input = Paragraph::new(ui.composer.as_str()).wrap(Wrap { trim: false });
@@ -161,7 +170,7 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
         input.scroll((input_scroll, 0)).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("human message (no automatic inference)"),
+                .title("human question · Enter queues current recipients"),
         ),
         composer,
     );

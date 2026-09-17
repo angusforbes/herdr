@@ -1,6 +1,37 @@
+#[path = "delivery_tests.rs"]
+mod delivery_tests;
 use super::*;
 use crate::{api::schema::*, raw_input::RawInputEvent, workspace::Workspace};
 use ratatui::layout::Rect;
+
+#[test]
+fn room_summary_keeps_earlier_pending_questions_visible() {
+    use crate::room_delivery::{DeliveryStatus, Status};
+    let member = crate::room::Member {
+        pane_id: "w1:p1".into(),
+        terminal_id: "t1".into(),
+        agent: "pi".into(),
+        name: "Ada".into(),
+        session: Some("Id:live".into()),
+    };
+    let make = |sequence, status| DeliveryStatus {
+        delivery_id: format!("d{sequence}"),
+        request_sequence: sequence,
+        recipient: member.clone(),
+        status,
+        detail: None,
+    };
+    let deliveries = [
+        make(1, Status::Queued),
+        make(1, Status::Submitted),
+        make(1, Status::Replied),
+        make(2, Status::Queued),
+    ];
+    let summary = delivery_summary(&deliveries);
+    assert!(summary.starts_with("Earlier requests: 2 pending"));
+    assert!(summary.contains("#2: 1 queued"));
+    assert!(!delivery_summary(&deliveries[3..]).contains("Earlier requests"));
+}
 
 fn app() -> App {
     let mut app = App::new(
@@ -99,7 +130,7 @@ async fn room_membership_is_current_and_historical_attribution_is_immutable() {
 }
 
 #[tokio::test]
-async fn room_api_reads_posts_replies_never_dispatch_and_reject_duplicate() {
+async fn room_api_reads_posts_replies_never_feed_pty_and_reject_duplicate() {
     let mut app = app();
     identify(&mut app, "reader");
     let member = crate::room::members(&app.state, 0).pop().unwrap();
@@ -468,7 +499,7 @@ async fn room_tab_clears_stale_recipient_before_selecting_current_member() {
         .state
         .room_ui
         .status
-        .contains("selection cleared to none"));
+        .contains("selection cleared to all"));
     app.handle_room_key(&tab);
     assert_eq!(
         app.state.room_ui.recipient.as_ref(),

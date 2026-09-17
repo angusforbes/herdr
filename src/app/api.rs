@@ -1019,6 +1019,15 @@ impl App {
             Method::RoomRead(params) => return self.handle_room_read(request.id, params),
             Method::RoomPost(params) => return self.handle_room_post(request.id, params),
             Method::RoomReply(params) => return self.handle_room_reply(request.id, params),
+            Method::RoomDeliveryRegister(params) => {
+                return self.handle_room_delivery_register(request.id, params)
+            }
+            Method::RoomDeliveryClaim(params) => {
+                return self.handle_room_delivery_claim(request.id, params)
+            }
+            Method::RoomDeliveryReport(params) => {
+                return self.handle_room_delivery_report(request.id, params)
+            }
             Method::SessionSnapshot(_) => return self.handle_session_snapshot(request.id),
             Method::WorkspaceList(_) => return self.handle_workspace_list(request.id),
             Method::WorkspaceGet(target) => return self.handle_workspace_get(request.id, target),

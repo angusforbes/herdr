@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Passive direct Herdr room client. Never prompts an agent or starts a server.
+"""Direct Herdr room client. Never injects terminal input or starts a server.
+
+Human posts enqueue automatic Pi delivery on a delivery-enabled server; reads and
+agent replies never dispatch. Socket access is trusted, not a security sandbox.
 
 Always require an explicit socket so a disposable prototype cannot accidentally
 address an inherited production Herdr socket. Local socket access is trusted,
@@ -51,7 +54,7 @@ def main(argv=None):
     read.add_argument("--after", type=int, default=0)
     read.add_argument("--limit", type=int, default=100)
     post = commands.add_parser("post")
-    post.add_argument("--to", help="one current pane id; manual-pull only, never dispatches")
+    post.add_argument("--to", help="one current pane id; omitted means all current workspace agents")
     post.add_argument("text", help="literal message, or - to read stdin")
     reply = commands.add_parser("reply")
     reply.add_argument("request", type=int, help="original human request sequence")

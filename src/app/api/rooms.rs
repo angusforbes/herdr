@@ -1,38 +1,49 @@
-//! Passive room API. Deliberately has no agent.prompt or terminal input calls.
+//! Room API: saved human questions feed only the volatile polling inbox.
 use super::responses::encode_success;
-use crate::{api::schema::*, app::App};
+use crate::{
+    api::schema::*,
+    app::App,
+    room_delivery::{now, Status},
+};
 
 fn encode_error(id: String, code: &str, message: String) -> String {
     super::responses::encode_error(id, code, message)
 }
 
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
 impl App {
     fn room_workspace_index(&self, id: &str) -> Option<usize> {
-        // Room writes must not retarget after workspace reordering. Unlike
-        // terminal navigation, this API accepts only exact stable identities.
+        // Exact stable identities only; ordinal navigation aliases can retarget.
         self.state.workspaces.iter().position(|ws| ws.id == id)
     }
 
+    pub(crate) fn cleanup_room_delivery(&mut self, now: u64) {
+        let current = self
+            .state
+            .workspaces
+            .iter()
+            .enumerate()
+            .map(|(index, ws)| (ws.id.clone(), crate::room::members(&self.state, index)))
+            .collect();
+        self.room_delivery.cleanup(&current, now);
+    }
+
     pub(super) fn handle_room_get(&mut self, id: String, params: WorkspaceTarget) -> String {
+        self.cleanup_room_delivery(now());
         let Some(index) = self.room_workspace_index(&params.workspace_id) else {
             return encode_error(id, "workspace_not_found", "unknown workspace".into());
         };
         let ws = &self.state.workspaces[index];
+        let members = crate::room::members(&self.state, index);
         encode_success(
             id,
             ResponseResult::RoomInfo {
                 room_id: format!("room:{}", ws.id),
                 workspace_id: ws.id.clone(),
-                members: crate::room::members(&self.state, index),
+                receivers: self.room_delivery.receivers(&ws.id, &members),
+                deliveries: self.room_delivery.deliveries(&ws.id),
+                members,
                 next_sequence: ws.room.next_sequence,
-                outbound_delivery: "disabled_manual_pull_only".into(),
+                outbound_delivery: "pi_polling_at_most_once".into(),
             },
         )
     }
@@ -60,18 +71,20 @@ impl App {
     }
 
     pub(super) fn handle_room_post(&mut self, id: String, params: RoomPostParams) -> String {
+        let timestamp = now();
+        self.cleanup_room_delivery(timestamp);
         let Some(index) = self.room_workspace_index(&params.workspace_id) else {
             return encode_error(id, "workspace_not_found", "unknown workspace".into());
         };
-        let recipient = match params.recipient {
-            Some(target) => match crate::room::members(&self.state, index)
-                .into_iter()
-                .find(|m| {
-                    m.pane_id == target.pane_id
-                        && m.terminal_id == target.terminal_id
-                        && m.session.as_deref() == Some(target.session.as_str())
-                }) {
-                Some(member) => Some(member),
+        let members = crate::room::members(&self.state, index);
+        let targeted = params.recipient.is_some();
+        let mut targets = match params.recipient {
+            Some(target) => match members.into_iter().find(|m| {
+                m.pane_id == target.pane_id
+                    && m.terminal_id == target.terminal_id
+                    && m.session.as_deref() == Some(target.session.as_str())
+            }) {
+                Some(member) => vec![member],
                 None => {
                     return encode_error(
                         id,
@@ -80,16 +93,69 @@ impl App {
                     )
                 }
             },
-            None => None,
+            None => members,
         };
+        // Match the domain's per-terminal/session audience deduplication, even
+        // if malformed/aliased pane state exposes the same session twice.
+        let mut seen = std::collections::HashSet::new();
+        targets.retain(|m| seen.insert((m.terminal_id.clone(), m.session.clone())));
+        if let Err(error) = self.room_delivery.check_capacity(targets.len()) {
+            return encode_error(id, "room_delivery_full", error);
+        }
         let mut candidate = self.state.workspaces[index].room.clone();
-        match candidate.post(params.text, recipient, now()) {
-            Ok(sequence) => self.finish_room_write(id, index, candidate, sequence),
+        let audience = targets
+            .iter()
+            .filter(|m| m.session.is_some())
+            .cloned()
+            .collect();
+        let posted = if targeted {
+            candidate.post(params.text, targets.first().cloned(), timestamp)
+        } else {
+            candidate.post_to(params.text, audience, timestamp)
+        };
+        match posted {
+            Ok(sequence) => self.finish_room_post_with(
+                id,
+                index,
+                candidate,
+                sequence,
+                targets,
+                crate::persist::save_checked,
+            ),
             Err(error) => encode_error(id, "invalid_room_post", error),
         }
     }
 
+    // Shared production/test transaction seam. No delivery exists until save succeeds.
+    pub(crate) fn finish_room_post_with(
+        &mut self,
+        id: String,
+        index: usize,
+        candidate: crate::room::Room,
+        sequence: u64,
+        targets: Vec<crate::room::Member>,
+        save: impl FnOnce(&crate::persist::SessionSnapshot) -> std::io::Result<()>,
+    ) -> String {
+        match self.save_room_candidate_with(index, candidate, save) {
+            Ok(persistence) => {
+                let ws = &self.state.workspaces[index];
+                if let Some(message) = ws.room.messages.iter().find(|m| m.sequence == sequence) {
+                    self.room_delivery.enqueue_saved(
+                        &ws.id,
+                        sequence,
+                        &message.text,
+                        targets,
+                        message.created_unix,
+                    );
+                }
+                self.room_written(id, index, sequence, persistence)
+            }
+            Err(error) => encode_error(id, "room_save_failed", error),
+        }
+    }
+
     pub(super) fn handle_room_reply(&mut self, id: String, params: RoomReplyParams) -> String {
+        self.cleanup_room_delivery(now());
         let Some(index) = self.room_workspace_index(&params.workspace_id) else {
             return encode_error(id, "workspace_not_found", "unknown workspace".into());
         };
@@ -108,34 +174,126 @@ impl App {
             );
         };
         let mut candidate = self.state.workspaces[index].room.clone();
-        match candidate.reply(params.request_sequence, member, params.text, now()) {
-            Ok(sequence) => self.finish_room_write(id, index, candidate, sequence),
+        match candidate.reply(params.request_sequence, member.clone(), params.text, now()) {
+            Ok(sequence) => match self.save_room_candidate(index, candidate) {
+                Ok(persistence) => {
+                    self.room_delivery.replied(
+                        &params.workspace_id,
+                        params.request_sequence,
+                        &member,
+                    );
+                    self.room_written(id, index, sequence, persistence)
+                }
+                Err(error) => encode_error(id, "room_save_failed", error),
+            },
             Err(error) => encode_error(id, "invalid_room_reply", error),
         }
     }
 
-    fn finish_room_write(
+    fn room_written(
         &mut self,
         id: String,
         index: usize,
-        candidate: crate::room::Room,
         sequence: u64,
+        persistence: &str,
     ) -> String {
-        match self.save_room_candidate(index, candidate) {
-            Ok(persistence) => {
-                self.render_dirty.request_generic();
-                self.render_notify.notify_one();
-                encode_success(
-                    id,
-                    ResponseResult::RoomWritten {
-                        room_id: format!("room:{}", self.state.workspaces[index].id),
-                        sequence,
-                        persistence: persistence.into(),
-                        outbound_delivery: "disabled_manual_pull_only".into(),
-                    },
-                )
-            }
-            Err(error) => encode_error(id, "room_save_failed", error),
+        self.render_dirty.request_generic();
+        self.render_notify.notify_one();
+        let workspace = &self.state.workspaces[index].id;
+        let deliveries = self.room_delivery.deliveries(workspace);
+        encode_success(
+            id,
+            ResponseResult::RoomWritten {
+                room_id: format!("room:{workspace}"),
+                sequence,
+                persistence: persistence.into(),
+                outbound_delivery: "pi_polling_at_most_once".into(),
+                queued: deliveries
+                    .iter()
+                    .filter(|d| d.request_sequence == sequence && d.status == Status::Queued)
+                    .count(),
+                unavailable: deliveries
+                    .iter()
+                    .filter(|d| d.request_sequence == sequence && d.status == Status::Unavailable)
+                    .count(),
+            },
+        )
+    }
+
+    pub(super) fn handle_room_delivery_register(
+        &mut self,
+        id: String,
+        params: RoomDeliveryRegisterParams,
+    ) -> String {
+        let timestamp = now();
+        self.cleanup_room_delivery(timestamp);
+        let Some(index) = self.room_workspace_index(&params.workspace_id) else {
+            return encode_error(id, "workspace_not_found", "unknown workspace".into());
+        };
+        let member = crate::room::members(&self.state, index)
+            .into_iter()
+            .find(|m| {
+                m.pane_id == params.pane_id
+                    && m.terminal_id == params.terminal_id
+                    && m.session.as_deref() == Some(params.session.as_str())
+            });
+        let Some(member) = member else {
+            return encode_error(
+                id,
+                "invalid_recipient",
+                "not a current room member/session".into(),
+            );
+        };
+        match self.room_delivery.register(
+            params.workspace_id,
+            member,
+            params.receiver_nonce,
+            timestamp,
+        ) {
+            Ok(receiver_id) => encode_success(
+                id,
+                ResponseResult::RoomDeliveryRegistered {
+                    receiver_id,
+                    server_epoch: self.room_delivery.epoch.clone(),
+                },
+            ),
+            Err(error) => encode_error(id, "invalid_room_receiver", error),
+        }
+    }
+
+    pub(super) fn handle_room_delivery_claim(
+        &mut self,
+        id: String,
+        params: RoomDeliveryClaimParams,
+    ) -> String {
+        let timestamp = now();
+        self.cleanup_room_delivery(timestamp);
+        match self.room_delivery.claim(
+            &params.receiver_id,
+            &params.server_epoch,
+            params.ready,
+            timestamp,
+        ) {
+            Ok(delivery) => encode_success(id, ResponseResult::RoomDeliveryClaimed { delivery }),
+            Err(error) => encode_error(id, "invalid_room_receiver", error),
+        }
+    }
+
+    pub(super) fn handle_room_delivery_report(
+        &mut self,
+        id: String,
+        params: RoomDeliveryReportParams,
+    ) -> String {
+        self.cleanup_room_delivery(now());
+        match self.room_delivery.report(
+            &params.receiver_id,
+            &params.server_epoch,
+            &params.delivery_id,
+            params.outcome,
+            params.detail,
+        ) {
+            Ok(()) => encode_success(id, ResponseResult::RoomDeliveryReported { accepted: true }),
+            Err(error) => encode_error(id, "invalid_room_delivery", error),
         }
     }
 }
