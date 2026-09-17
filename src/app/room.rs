@@ -1,4 +1,6 @@
 //! Room client presentation and input; shared facts are in Workspace::room.
+pub(crate) mod editor;
+pub(crate) mod selection;
 #[cfg(test)]
 mod tests;
 use crate::{
@@ -18,6 +20,13 @@ pub struct RoomPresentation {
     pub transcript_width: u16,
     pub transcript_messages: usize,
     pub composer: String,
+    pub editor: editor::Editor,
+    pub composer_rows: Vec<editor::Row>,
+    pub composer_area: ratatui::layout::Rect,
+    pub composer_cursor: Option<ratatui::layout::Position>,
+    pub transcript_area: ratatui::layout::Rect,
+    pub transcript_begin: usize,
+    pub selection: Option<selection::Selection>,
     pub members: Vec<Member>,
     pub receivers: Vec<crate::room_delivery::ReceiverStatus>,
     pub delivery_summary: String,
@@ -102,6 +111,8 @@ impl AppState {
             };
         }
         self.room_ui.visible = true;
+        self.room_ui.selection = None;
+        self.room_ui.composer_cursor = None;
         self.room_ui.members = crate::room::members(self, index);
         self.room_ui.refreshed = None;
         self.mode = Mode::Terminal;
@@ -113,12 +124,7 @@ impl AppState {
     }
 
     pub(crate) fn insert_room_text(&mut self, text: &str) {
-        for ch in text.chars().filter(|ch| !ch.is_control()) {
-            if self.room_ui.composer.len() + ch.len_utf8() > crate::room::MAX_MESSAGE_BYTES {
-                break;
-            }
-            self.room_ui.composer.push(ch);
-        }
+        self.room_ui.editor.insert(&mut self.room_ui.composer, text);
     }
 }
 
@@ -193,8 +199,52 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => self.state.room_ui.visible = false,
-            KeyCode::Backspace => {
-                self.state.room_ui.composer.pop();
+            KeyCode::Up if key.modifiers.is_empty() => {
+                self.state.room_ui.scroll = self.state.room_ui.scroll.saturating_add(1);
+            }
+            KeyCode::Down if key.modifiers.is_empty() => {
+                self.state.room_ui.scroll = self.state.room_ui.scroll.saturating_sub(1);
+            }
+            KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Home
+            | KeyCode::End
+            | KeyCode::Backspace
+            | KeyCode::Delete
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::CONTROL =>
+            {
+                let ui = &mut self.state.room_ui;
+                let control = key.modifiers == KeyModifiers::CONTROL;
+                match key.code {
+                    KeyCode::Left if control => ui.editor.word_left(&ui.composer),
+                    KeyCode::Left => ui.editor.left(&ui.composer),
+                    KeyCode::Right if control => ui.editor.word_right(&ui.composer),
+                    KeyCode::Right => ui.editor.right(&ui.composer),
+                    KeyCode::Home => ui.editor.home(&ui.composer, control),
+                    KeyCode::End => ui.editor.end(&ui.composer, control),
+                    KeyCode::Backspace => ui.editor.backspace(&mut ui.composer, control),
+                    KeyCode::Delete => ui.editor.delete(&mut ui.composer),
+                    _ => {}
+                }
+            }
+            KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
+                let ui = &mut self.state.room_ui;
+                ui.editor.backspace(&mut ui.composer, true);
+            }
+            KeyCode::Char('c' | 'C')
+                if key.modifiers == KeyModifiers::CONTROL
+                    || key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+            {
+                if let Some(text) = self
+                    .state
+                    .room_ui
+                    .selection
+                    .as_ref()
+                    .and_then(|s| s.text(&self.state.room_ui.transcript_lines))
+                {
+                    self.state.request_clipboard_write = Some(text.into_bytes());
+                    self.dispatch_pending_clipboard_write();
+                }
             }
             KeyCode::PageUp => {
                 self.state.room_ui.scroll = self.state.room_ui.scroll.saturating_add(5)
@@ -218,7 +268,10 @@ impl App {
                 };
                 self.state.room_ui.recipient = next.cloned();
             }
-            KeyCode::Enter => self.post_room_composer(),
+            KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => {
+                self.state.insert_room_text("\n");
+            }
+            KeyCode::Enter if key.modifiers.is_empty() => self.post_room_composer(),
             KeyCode::Char('v')
                 if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
             {
@@ -285,6 +338,7 @@ impl App {
                 ..
             }) => {
                 self.state.room_ui.composer.clear();
+                self.state.room_ui.editor = editor::Editor::default();
                 self.state.room_ui.scroll = 0;
                 self.state.room_ui.status = format!(
                     "#{sequence} {persistence} · {queued} queued · {unavailable} unavailable"
@@ -311,6 +365,30 @@ impl App {
             return false;
         }
         let position = ratatui::layout::Position::new(mouse.column, mouse.row);
+        // Own the whole gesture, even outside the viewport/chrome. Never turn
+        // transcript drags into tab presses, pane selection or terminal input.
+        if self.state.room_active()
+            && self.state.room_ui.selection.is_some_and(|s| s.dragging)
+            && matches!(
+                mouse.kind,
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+            )
+        {
+            let ui = &mut self.state.room_ui;
+            if let (Some(end), Some(selection)) = (
+                selection::hit(
+                    &ui.transcript_lines,
+                    ui.transcript_begin,
+                    ui.transcript_area,
+                    position,
+                ),
+                &mut ui.selection,
+            ) {
+                selection.end = end;
+                selection.dragging = mouse.kind != MouseEventKind::Up(MouseButton::Left);
+            }
+            return true;
+        }
         if self.state.view.room_hit_area.contains(position)
             && !matches!(
                 mouse.kind,
@@ -330,7 +408,40 @@ impl App {
                 MouseEventKind::ScrollDown => {
                     self.state.room_ui.scroll = self.state.room_ui.scroll.saturating_sub(3)
                 }
-                MouseEventKind::Down(MouseButton::Left) => self.state.mode = Mode::Terminal,
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.state.mode = Mode::Terminal;
+                    let ui = &mut self.state.room_ui;
+                    ui.selection = None;
+                    if ui.transcript_area.contains(position) {
+                        ui.selection = selection::hit(
+                            &ui.transcript_lines,
+                            ui.transcript_begin,
+                            ui.transcript_area,
+                            position,
+                        )
+                        .map(|point| selection::Selection {
+                            anchor: point,
+                            end: point,
+                            dragging: true,
+                        });
+                    } else if ui.composer_area.contains(position) {
+                        // A batched paste/key may precede this click before the
+                        // next frame. Recompute this bounded buffer, never index
+                        // stale byte offsets into a newly edited draft.
+                        let rows = editor::rows(&ui.composer, ui.composer_area.width as usize);
+                        let row =
+                            ui.editor.top + position.y.saturating_sub(ui.composer_area.y) as usize;
+                        if let Some(row) = rows.get(row) {
+                            ui.editor.cursor = row.start
+                                + editor::byte_at_column(
+                                    &ui.composer[row.start..row.end],
+                                    position.x.saturating_sub(ui.composer_area.x) as usize,
+                                );
+                        } else {
+                            ui.editor.cursor = ui.composer.len();
+                        }
+                    }
+                }
                 _ => {}
             }
             return true;

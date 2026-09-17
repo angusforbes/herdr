@@ -13,7 +13,7 @@ fn is_retained_selection_copy_key(key: &TerminalKey) -> bool {
 }
 
 impl App {
-    pub(super) fn dispatch_pending_clipboard_write(&mut self) -> bool {
+    pub(in crate::app) fn dispatch_pending_clipboard_write(&mut self) -> bool {
         let Some(content) = self.state.request_clipboard_write.take() else {
             return false;
         };

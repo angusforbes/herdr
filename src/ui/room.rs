@@ -1,8 +1,8 @@
-use crate::app::AppState;
+use crate::app::{room::editor, AppState, Mode};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::Style,
-    text::Line,
+    style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
@@ -13,15 +13,25 @@ use unicode_width::UnicodeWidthStr;
 /// active-room cache, never a pane-scaled loop and never any filesystem I/O.
 pub(super) fn compute_room_view(app: &mut AppState, area: Rect) {
     if !app.room_active() {
+        app.room_ui.selection = None;
+        app.room_ui.composer_cursor = None;
         return;
     }
     let Some(ws) = app.active.and_then(|index| app.workspaces.get(index)) else {
         return;
     };
     let ui = &mut app.room_ui;
-    let transcript = room_areas(area)[2];
+    // Composer work is bounded by 8192 bytes, independent of history/panes.
+    ui.composer_rows = editor::rows(&ui.composer, area.width.saturating_sub(2) as usize);
+    let [_, _, transcript, _, composer] = room_areas(area, ui.composer_rows.len());
+    ui.transcript_area = transcript;
+    ui.composer_area = Block::default().borders(Borders::ALL).inner(composer);
+    ui.composer_cursor = ui
+        .editor
+        .project(&ui.composer, &ui.composer_rows, ui.composer_area);
     let width = transcript.width.max(1);
     if ui.transcript_width != width || ui.transcript_messages > ws.room.messages.len() {
+        ui.selection = None; // display-row coordinates cease to exist on rewrap
         ui.transcript_lines.clear();
         ui.transcript_messages = 0;
         ui.transcript_width = width;
@@ -65,6 +75,11 @@ pub(super) fn compute_room_view(app: &mut AppState, area: Rect) {
             .len()
             .saturating_sub(transcript.height as usize),
     );
+    ui.transcript_begin = ui
+        .transcript_lines
+        .len()
+        .saturating_sub(transcript.height as usize)
+        .saturating_sub(ui.scroll);
 }
 
 fn wrap_into(text: &str, width: usize, lines: &mut Vec<String>) {
@@ -91,21 +106,21 @@ fn wrap_into(text: &str, width: usize, lines: &mut Vec<String>) {
     }
 }
 
-fn room_areas(area: Rect) -> [Rect; 5] {
+fn room_areas(area: Rect, composer_rows: usize) -> [Rect; 5] {
     Layout::vertical([
         Constraint::Length(2),
         Constraint::Length(3),
         Constraint::Min(1),
         Constraint::Length(2),
-        Constraint::Length(3),
+        Constraint::Length(composer_rows.clamp(1, 6) as u16 + 2),
     ])
     .areas(area)
 }
 
 pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
     let ui = &app.room_ui;
-    let [header, members, transcript, status, composer] = room_areas(area);
-    frame.render_widget(Paragraph::new("room · human owned · Pi delivery (at most once, 10 min)\nCtrl+Alt+R / Esc: terminal · Tab: all / one recipient · Enter: send · PgUp/PgDn: history")
+    let [header, members, transcript, status, composer] = room_areas(area, ui.composer_rows.len());
+    frame.render_widget(Paragraph::new("room · human owned · Pi delivery (at most once, 10 min)\nEsc: terminal · Tab: recipient · Enter: send · Shift+Enter: newline · ↑/↓: history · drag / Ctrl+C: copy")
         .style(Style::default().fg(app.palette.accent)), header);
     let selected = ui
         .recipient
@@ -145,15 +160,27 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
         )));
     }
     frame.render_widget(Paragraph::new(lines), members);
-    let height = transcript.height as usize;
-    let max_scroll = ui.transcript_lines.len().saturating_sub(height);
-    let begin = max_scroll.saturating_sub(ui.scroll.min(max_scroll));
     let visible: Vec<_> = ui
         .transcript_lines
         .iter()
-        .skip(begin)
-        .take(height)
-        .map(|line| Line::from(line.as_str()))
+        .enumerate()
+        .skip(ui.transcript_begin)
+        .take(transcript.height as usize)
+        .map(|(row, line)| {
+            let range = ui
+                .selection
+                .as_ref()
+                .map(|s| s.range(row, line.len()))
+                .unwrap_or(0..0);
+            Line::from(vec![
+                Span::raw(&line[..range.start]),
+                Span::styled(
+                    &line[range.clone()],
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ),
+                Span::raw(&line[range.end..]),
+            ])
+        })
         .collect();
     frame.render_widget(Paragraph::new(visible), transcript);
     frame.render_widget(
@@ -161,19 +188,25 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
             .wrap(Wrap { trim: false }),
         status,
     );
-    let input = Paragraph::new(ui.composer.as_str()).wrap(Wrap { trim: false });
-    let input_lines = input.line_count(composer.width.saturating_sub(2).max(1));
-    let input_scroll = input_lines
-        .saturating_sub(composer.height.saturating_sub(2) as usize)
-        .min(u16::MAX as usize) as u16;
     frame.render_widget(
-        input.scroll((input_scroll, 0)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("human question · Enter queues current recipients"),
-        ),
+        Block::default()
+            .borders(Borders::ALL)
+            .title("human question · Enter sends · Shift+Enter newline"),
         composer,
     );
+    let input: Vec<_> = ui
+        .composer_rows
+        .iter()
+        .skip(ui.editor.top)
+        .take(ui.composer_area.height as usize)
+        .map(|row| Line::from(&ui.composer[row.start..row.end]))
+        .collect();
+    frame.render_widget(Paragraph::new(input), ui.composer_area);
+    if app.mode == Mode::Terminal {
+        if let Some(cursor) = ui.composer_cursor {
+            frame.set_cursor_position(cursor);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -203,11 +236,9 @@ mod tests {
         ] {
             app.room_ui.scroll = usize::MAX;
             compute_room_view(&mut app, area);
-            let max = app
-                .room_ui
-                .transcript_lines
-                .len()
-                .saturating_sub(room_areas(area)[2].height as usize);
+            let max = app.room_ui.transcript_lines.len().saturating_sub(
+                room_areas(area, app.room_ui.composer_rows.len())[2].height as usize,
+            );
             assert_eq!(app.room_ui.scroll, max);
             app.workspaces[0]
                 .room

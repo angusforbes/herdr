@@ -115,8 +115,16 @@ pub(crate) fn tab_surface_cursor(
     terminal_runtimes: &TerminalRuntimeRegistry,
     surface: TabSurfaceView<'_>,
 ) -> Option<CursorState> {
-    if app.mode != Mode::Terminal || app.room_active() {
+    if app.mode != Mode::Terminal {
         return None;
+    }
+    if app.room_active() {
+        return app.room_ui.composer_cursor.map(|position| CursorState {
+            x: position.x,
+            y: position.y,
+            visible: true,
+            shape: 6,
+        });
     }
 
     let ws_idx = app.active?;

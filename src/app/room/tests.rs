@@ -1,5 +1,7 @@
 #[path = "delivery_tests.rs"]
 mod delivery_tests;
+#[path = "ux_tests.rs"]
+mod ux_tests;
 use super::*;
 use crate::{api::schema::*, raw_input::RawInputEvent, workspace::Workspace};
 use ratatui::layout::Rect;
