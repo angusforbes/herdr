@@ -127,6 +127,10 @@ impl App {
     ) -> bool {
         match plan {
             super::input::RepeatPlan::Forwarded(target) => {
+                if self.state.room_active() && self.state.popup_pane.is_none() {
+                    // Retain the lease until release; dropping it strands key-down.
+                    return false;
+                }
                 if !self.forward_terminal_key_to_target(&target, key).await {
                     self.input_leases.remove(&lease_key);
                 }
@@ -184,6 +188,7 @@ impl App {
     ) -> bool {
         let previous_mode = self.state.mode;
         let changed = match event {
+            crate::raw_input::RawInputEvent::Key(key) if self.handle_room_key(&key) => true,
             crate::raw_input::RawInputEvent::Key(key) => {
                 let lease_key = super::input::InputLeaseKey::new(super::LOCAL_INPUT_SOURCE, &key);
                 let key = self.input_leases.normalize_press(&lease_key, key);
@@ -232,7 +237,9 @@ impl App {
             crate::raw_input::RawInputEvent::Mouse(mouse) => {
                 let changes_view = !matches!(mouse.kind, crossterm::event::MouseEventKind::Moved)
                     || self.state.mode.mouse_motion_changes_view();
-                if self.state.popup_pane.is_some() || self.state.mouse_capture {
+                if self.handle_room_mouse(mouse) {
+                    // Room chrome is not terminal mouse capture.
+                } else if self.state.popup_pane.is_some() || self.state.mouse_capture {
                     self.handle_mouse(mouse);
                 } else {
                     self.state

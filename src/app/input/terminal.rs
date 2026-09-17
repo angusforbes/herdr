@@ -65,6 +65,9 @@ impl App {
         source_id: InputSourceId,
         key: TerminalKey,
     ) -> Option<PreparedPaneInput> {
+        if self.handle_room_key(&key) || self.state.room_active() {
+            return None;
+        }
         if self.handle_panel_shortcut(&key) {
             return None;
         }
@@ -291,7 +294,17 @@ impl App {
     fn terminal_input_runtime(
         &self,
         target: &TerminalInputTarget,
+        kind: crossterm::event::KeyEventKind,
     ) -> Option<&crate::terminal::TerminalRuntime> {
+        // Target forwarding is lease-owned, including focus-loss cleanup.
+        // A room may finish an existing key-down, but never send a new press
+        // or repeat to a hidden PTY. Keep the original terminal identity.
+        if self.state.room_active()
+            && self.state.popup_pane.is_none()
+            && kind != crossterm::event::KeyEventKind::Release
+        {
+            return None;
+        }
         if let Some(runtime) = self.terminal_runtimes.get(&target.terminal_id) {
             return Some(runtime);
         }
@@ -317,7 +330,7 @@ impl App {
         target: &TerminalInputTarget,
         key: TerminalKey,
     ) -> bool {
-        let Some(runtime) = self.terminal_input_runtime(target) else {
+        let Some(runtime) = self.terminal_input_runtime(target, key.kind) else {
             return false;
         };
         let bytes = runtime.encode_terminal_key(key.clone());
@@ -329,7 +342,7 @@ impl App {
         target: &TerminalInputTarget,
         key: TerminalKey,
     ) -> bool {
-        let Some(runtime) = self.terminal_input_runtime(target) else {
+        let Some(runtime) = self.terminal_input_runtime(target, key.kind) else {
             return false;
         };
         let bytes = runtime.encode_terminal_key(key.clone());

@@ -176,6 +176,7 @@ pub(crate) fn reserve_workspace_ids(workspaces: &[Workspace]) {
 
 /// A named workspace containing tabs.
 pub struct Workspace {
+    pub room: crate::room::Room,
     /// Stable public workspace identity, independent of display order.
     pub id: String,
     /// User-provided override. If set, auto-derived identity stops updating.
@@ -252,6 +253,7 @@ impl Workspace {
         let (cached_git_space, cached_auto_label, cached_git_status_key) =
             discover_workspace_git_identity(&identity_cwd);
         Self {
+            room: crate::room::Room::default(),
             id,
             custom_name: label,
             identity_cwd: identity_cwd.clone(),
@@ -451,6 +453,7 @@ impl Workspace {
             discover_workspace_git_identity(&initial_cwd);
         Ok((
             Self {
+                room: crate::room::Room::default(),
                 id,
                 custom_name: None,
                 identity_cwd: initial_cwd.clone(),
@@ -1289,6 +1292,7 @@ impl Workspace {
         let mut public_pane_numbers = HashMap::new();
         public_pane_numbers.insert(tab.root_pane, 1);
         Self {
+            room: crate::room::Room::default(),
             id: generate_workspace_id(),
             custom_name: Some(name.to_string()),
             identity_cwd: identity_cwd.clone(),

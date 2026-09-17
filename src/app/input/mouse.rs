@@ -75,7 +75,7 @@ impl AppState {
         terminal_runtimes: &TerminalRuntimeRegistry,
         mouse: MouseEvent,
     ) {
-        if self.mode != Mode::Terminal {
+        if self.mode != Mode::Terminal || self.room_active() {
             return;
         }
         let Some(info) = self.pane_at(mouse.column, mouse.row).cloned() else {

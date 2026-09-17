@@ -3647,6 +3647,112 @@
           ],
           "type": "string"
         },
+        "RoomPostParams": {
+          "properties": {
+            "recipient": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/RoomRecipient"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional pane in this workspace. Records a manual-pull request only."
+            },
+            "text": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "text"
+          ],
+          "type": "object"
+        },
+        "RoomReadParams": {
+          "properties": {
+            "after_sequence": {
+              "default": 0,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "limit": {
+              "default": null,
+              "description": "Bounded page; defaults to 100, maximum 100.",
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id"
+          ],
+          "type": "object"
+        },
+        "RoomRecipient": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "session": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "terminal_id",
+            "session"
+          ],
+          "type": "object"
+        },
+        "RoomReplyParams": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "request_sequence": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "session": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "request_sequence",
+            "pane_id",
+            "terminal_id",
+            "session",
+            "text"
+          ],
+          "type": "object"
+        },
         "ServerLiveHandoffParams": {
           "properties": {
             "expected_protocol": {
@@ -4579,6 +4685,70 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "room.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/WorkspaceTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "room.read",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RoomReadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "room.post",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RoomPostParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "room.reply",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RoomReplyParams"
             }
           },
           "required": [
@@ -7300,6 +7470,96 @@
             }
           ]
         },
+        "Member": {
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "session": {
+              "description": "Only live hook session identity is reply-capable; restored metadata is not authority.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "terminal_id",
+            "agent",
+            "name"
+          ],
+          "type": "object"
+        },
+        "Message": {
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/Member"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "None denotes the human owner, never a coordinator agent."
+            },
+            "created_unix": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "expires_unix": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "recipient": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/Member"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reply_to": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "sequence": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "text",
+            "created_unix"
+          ],
+          "type": "object"
+        },
         "NotificationShowReason": {
           "enum": [
             "shown",
@@ -8623,6 +8883,102 @@
         },
         "ResponseResult": {
           "oneOf": [
+            {
+              "properties": {
+                "members": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Member"
+                  },
+                  "type": "array"
+                },
+                "next_sequence": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "outbound_delivery": {
+                  "type": "string"
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "room_info",
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "room_id",
+                "workspace_id",
+                "members",
+                "next_sequence",
+                "outbound_delivery"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "messages": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Message"
+                  },
+                  "type": "array"
+                },
+                "next_sequence": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "room_messages",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "room_id",
+                "messages",
+                "next_sequence"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "outbound_delivery": {
+                  "type": "string"
+                },
+                "persistence": {
+                  "type": "string"
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "sequence": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "room_written",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "room_id",
+                "sequence",
+                "persistence",
+                "outbound_delivery"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "capabilities": {

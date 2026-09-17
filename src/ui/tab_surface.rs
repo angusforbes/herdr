@@ -34,6 +34,12 @@ pub(crate) fn compute_tab_surface(
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) -> TabSurfaceLayout {
+    if app.room_active() {
+        return TabSurfaceLayout {
+            pane_infos: Vec::new(),
+            split_borders: Vec::new(),
+        };
+    }
     let split_borders = app
         .active
         .and_then(|i| app.workspaces.get(i))
@@ -69,6 +75,10 @@ pub(crate) fn render_tab_surface(
     surface: TabSurfaceView<'_>,
     frame: &mut Frame,
 ) {
+    if app.room_active() {
+        super::room::render_room(app, frame, app.view.terminal_area);
+        return;
+    }
     render_panes(
         app,
         terminal_runtimes,
@@ -105,7 +115,7 @@ pub(crate) fn tab_surface_cursor(
     terminal_runtimes: &TerminalRuntimeRegistry,
     surface: TabSurfaceView<'_>,
 ) -> Option<CursorState> {
-    if app.mode != Mode::Terminal {
+    if app.mode != Mode::Terminal || app.room_active() {
         return None;
     }
 
@@ -306,7 +316,7 @@ mod tests {
         assert_eq!(frame.hyperlinks, vec![uri.to_owned()]);
         assert_eq!(
             frame_digest(&frame),
-            "aedb4c09b5e568f4c5ef5fe1a8de42135709056ec2b6a0be8a93ef28e5f12528"
+            "ac35f0622a9326c9fd3f9d44e08a25f8720a5e4c1139280b3f9b80115b387c25"
         );
     }
 

@@ -81,6 +81,9 @@ impl App {
         &mut self,
         key: TerminalKey,
     ) -> Option<super::TerminalInputTarget> {
+        if self.handle_room_key(&key) {
+            return None;
+        }
         if self.state.popup_pane.is_some() || self.panel_arrow_targets_terminal(&key) {
             return self.handle_terminal_key(key).await;
         }
@@ -127,6 +130,13 @@ impl App {
     }
 
     pub(crate) fn handle_text_commit_headless(&mut self, text: &str) {
+        if self.state.room_active()
+            && self.state.popup_pane.is_none()
+            && self.state.mode == Mode::Terminal
+        {
+            self.state.insert_room_text(text);
+            return;
+        }
         if text.is_empty() {
             return;
         }
@@ -157,6 +167,13 @@ impl App {
     }
 
     pub(super) async fn handle_text_commit(&mut self, text: String) {
+        if self.state.room_active()
+            && self.state.popup_pane.is_none()
+            && self.state.mode == Mode::Terminal
+        {
+            self.state.insert_room_text(&text);
+            return;
+        }
         if text.is_empty() {
             return;
         }
@@ -187,6 +204,13 @@ impl App {
     }
 
     pub(super) async fn handle_paste(&mut self, text: String) {
+        if self.state.room_active()
+            && self.state.popup_pane.is_none()
+            && self.state.mode == Mode::Terminal
+        {
+            self.state.insert_room_text(&text);
+            return;
+        }
         if self.state.popup_pane.is_some() {
             if let Some(runtime) = self.popup_runtime() {
                 let _ = runtime.send_paste(text).await;
@@ -343,6 +367,9 @@ impl App {
         source_id: super::InputSourceId,
         mouse: MouseEvent,
     ) {
+        if self.handle_room_mouse(mouse) {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.pending_url_click_sources.remove(&source_id);

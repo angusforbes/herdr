@@ -408,6 +408,7 @@ fn restore_workspace(
 
     (
         Some(Workspace {
+            room: snap.room.clone(),
             id: workspace_id,
             custom_name: snap.custom_name.clone(),
             identity_cwd: snap.identity_cwd.clone(),
@@ -1170,9 +1171,13 @@ mod tests {
     #[tokio::test]
     async fn restore_carries_persisted_agent_session_metadata() {
         let cwd = std::env::current_dir().unwrap();
+        let mut room = crate::room::Room::default();
+        room.post("restored without prompting".into(), None, 0)
+            .unwrap();
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
+                room: room.clone(),
                 id: Some("workspace".into()),
                 custom_name: None,
                 identity_cwd: cwd.clone(),
@@ -1214,7 +1219,7 @@ mod tests {
         };
         let (events, _event_rx) = mpsc::channel(4);
 
-        let (_workspaces, terminals, _runtimes) = restore(
+        let (workspaces, terminals, _runtimes) = restore(
             &snapshot,
             None,
             24,
@@ -1245,6 +1250,9 @@ mod tests {
         assert_eq!(session.source, "herdr:opencode");
         assert_eq!(session.agent, "opencode");
         assert_eq!(session.session_ref.value, "opencode-session");
+        assert_eq!(workspaces[0].room, room);
+        assert!(terminal.hook_authority.is_none());
+        assert!(terminal.pending_agent_resume_plan.is_none());
     }
 
     #[tokio::test]
@@ -1257,6 +1265,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                room: crate::room::Room::default(),
                 public_pane_numbers: HashMap::from([(10, 1), (20, 3)]),
                 next_public_pane_number: 4,
                 public_tab_numbers: vec![5],
@@ -1366,6 +1375,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                room: crate::room::Room::default(),
                 public_pane_numbers: HashMap::from([(10, 1), (11, 2), (12, 3), (13, 4)]),
                 next_public_pane_number: 5,
                 public_tab_numbers: vec![1, 3, 4, 5],
@@ -1445,6 +1455,7 @@ mod tests {
     fn legacy_restore_precomputes_missing_public_pane_numbers() {
         let cwd = std::env::current_dir().unwrap();
         let snapshot = WorkspaceSnapshot {
+            room: crate::room::Room::default(),
             id: Some("w1".into()),
             custom_name: None,
             identity_cwd: cwd,
@@ -1484,6 +1495,7 @@ mod tests {
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
+                room: crate::room::Room::default(),
                 id: Some("workspace".into()),
                 custom_name: None,
                 identity_cwd: cwd.clone(),
@@ -1693,6 +1705,7 @@ mod tests {
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
+                room: crate::room::Room::default(),
                 id: Some("workspace".into()),
                 custom_name: None,
                 identity_cwd: cwd,

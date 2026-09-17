@@ -19,6 +19,7 @@ mod ids;
 mod input;
 pub(crate) mod pane_graphics;
 mod popup;
+pub(crate) mod room;
 mod runtime;
 mod runtime_mutations;
 pub(crate) mod search_pane;
@@ -536,6 +537,7 @@ impl App {
         let (theme_palette, theme_name) = resolve_effective_theme(&theme_runtime, None);
 
         let mut state = AppState {
+            room_ui: room::RoomPresentation::default(),
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),
@@ -595,6 +597,7 @@ impl App {
             tab_scroll_follow_active: true,
             mobile_switcher_scroll: 0,
             view: state::ViewState {
+                room_hit_area: Rect::default(),
                 layout: state::ViewLayout::Desktop,
                 sidebar_rect: Rect::default(),
                 workspace_card_areas: Vec::new(),
@@ -1659,7 +1662,7 @@ impl App {
     pub(crate) fn terminal_input_context(&self) -> Option<TerminalInputContext> {
         if let Some(popup) = &self.state.popup_pane {
             Some(TerminalInputContext::Popup(popup.terminal_id.clone()))
-        } else if self.state.mode == Mode::Terminal {
+        } else if self.state.mode == Mode::Terminal && !self.state.room_active() {
             Some(TerminalInputContext::Pane)
         } else {
             None
@@ -1675,6 +1678,10 @@ impl App {
     ) {
         match plan {
             input::RepeatPlan::Forwarded(target) => {
+                if self.state.room_active() && self.state.popup_pane.is_none() {
+                    // Retain the lease until release; dropping it strands key-down.
+                    return;
+                }
                 if !self.forward_terminal_key_to_target_headless(&target, key) {
                     self.input_leases.remove(&lease_key);
                 }
@@ -1779,6 +1786,10 @@ impl App {
             let previous_mode = self.state.mode;
             match event {
                 crate::raw_input::RawInputEvent::Key(key) => {
+                    if self.handle_room_key(&key) {
+                        self.sync_prefix_input_source(previous_mode);
+                        continue;
+                    }
                     let lease_key = input::InputLeaseKey::new(source_id, &key);
                     let key = self.input_leases.normalize_press(&lease_key, key);
                     match key.kind {
@@ -1823,6 +1834,10 @@ impl App {
                     self.handle_text_commit_headless(text.as_str());
                 }
                 crate::raw_input::RawInputEvent::Mouse(mouse) => {
+                    if self.handle_room_mouse(mouse) {
+                        self.sync_prefix_input_source(previous_mode);
+                        continue;
+                    }
                     if self.state.popup_pane.is_some() || self.state.mouse_capture {
                         self.handle_mouse_event_headless(source_id, mouse);
                     } else {
@@ -1831,7 +1846,12 @@ impl App {
                     }
                 }
                 crate::raw_input::RawInputEvent::Paste(text) => {
-                    if self.try_route_paste_to_popup(&text) {
+                    if self.state.room_active()
+                        && self.state.popup_pane.is_none()
+                        && self.state.mode == Mode::Terminal
+                    {
+                        self.state.insert_room_text(&text);
+                    } else if self.try_route_paste_to_popup(&text) {
                     } else if self.state.mode != Mode::Terminal {
                         self.paste_into_active_text_input(&text);
                     } else {

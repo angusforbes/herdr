@@ -16,12 +16,13 @@ const ZOOM_INDICATOR: &str = "ZOOM";
 // The narrowest overflowing tab strip worth keeping interactive: one
 // minimum-width tab, both scroll controls, and the new-tab control.
 const MIN_TAB_STRIP_WIDTH: u16 =
-    MIN_TAB_WIDTH + NEW_TAB_WIDTH + TAB_SCROLL_BUTTON_WIDTH.saturating_mul(2);
+    8 + MIN_TAB_WIDTH + NEW_TAB_WIDTH + TAB_SCROLL_BUTTON_WIDTH.saturating_mul(2);
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TabBarView {
     pub scroll: usize,
     pub tab_hit_areas: Vec<Rect>,
+    pub room_hit_area: Rect,
     pub scroll_left_hit_area: Rect,
     pub scroll_right_hit_area: Rect,
     pub new_tab_hit_area: Rect,
@@ -183,6 +184,32 @@ pub(crate) fn compute_tab_bar_view(
     follow_active: bool,
     mouse_chrome: bool,
 ) -> TabBarView {
+    let width = area.width.min(8);
+    let room_hit_area = Rect::new(area.x, area.y, width, area.height.min(1));
+    let terminal_area = Rect::new(
+        area.x + width,
+        area.y,
+        area.width.saturating_sub(width),
+        area.height,
+    );
+    let mut view = compute_terminal_tab_bar_view(
+        ws,
+        terminal_area,
+        current_scroll,
+        follow_active,
+        mouse_chrome,
+    );
+    view.room_hit_area = room_hit_area;
+    view
+}
+
+fn compute_terminal_tab_bar_view(
+    ws: &crate::workspace::Workspace,
+    area: Rect,
+    current_scroll: usize,
+    follow_active: bool,
+    mouse_chrome: bool,
+) -> TabBarView {
     if area.width == 0 || area.height == 0 {
         return TabBarView::default();
     }
@@ -197,6 +224,7 @@ pub(crate) fn compute_tab_bar_view(
         return TabBarView {
             scroll,
             tab_hit_areas: layout_tab_hit_areas(ws, area, scroll),
+            room_hit_area: Rect::default(),
             scroll_left_hit_area: Rect::default(),
             scroll_right_hit_area: Rect::default(),
             new_tab_hit_area: Rect::default(),
@@ -223,6 +251,7 @@ pub(crate) fn compute_tab_bar_view(
         return TabBarView {
             scroll: 0,
             tab_hit_areas: all_tabs,
+            room_hit_area: Rect::default(),
             scroll_left_hit_area: Rect::default(),
             scroll_right_hit_area: Rect::default(),
             new_tab_hit_area,
@@ -267,6 +296,7 @@ pub(crate) fn compute_tab_bar_view(
     TabBarView {
         scroll,
         tab_hit_areas,
+        room_hit_area: Rect::default(),
         scroll_left_hit_area: left_hit_area,
         scroll_right_hit_area: right_hit_area,
         new_tab_hit_area,
@@ -333,6 +363,15 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         area,
     );
 
+    frame.render_widget(
+        Paragraph::new(" room ").style(if app.room_active() {
+            Style::default().fg(panel_contrast_fg(p)).bg(p.accent)
+        } else {
+            Style::default().fg(p.overlay1).bg(p.surface0)
+        }),
+        app.view.room_hit_area,
+    );
+
     let first_visible_idx = app
         .view
         .tab_hit_areas
@@ -389,7 +428,7 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         if rect.width == 0 {
             continue;
         }
-        let active = idx == ws.active_tab;
+        let active = idx == ws.active_tab && !app.room_active();
         let style = if active {
             let base = Style::default().fg(panel_contrast_fg(p)).bg(p.accent);
             if tab.is_auto_named() {

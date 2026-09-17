@@ -49,6 +49,8 @@ pub struct TabHistorySnapshot {
 #[derive(Serialize, Deserialize)]
 pub struct WorkspaceSnapshot {
     #[serde(default)]
+    pub room: crate::room::Room,
+    #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
     pub custom_name: Option<String>,
@@ -154,6 +156,7 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
         };
 
         Self {
+            room: crate::room::Room::default(),
             id: None,
             custom_name: snap.custom_name,
             identity_cwd,
@@ -285,6 +288,7 @@ fn capture_workspace(
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> WorkspaceSnapshot {
     WorkspaceSnapshot {
+        room: ws.room.clone(),
         id: Some(ws.id.clone()),
         custom_name: ws.custom_name.clone(),
         identity_cwd: ws
@@ -596,6 +600,35 @@ mod tests {
     }
 
     #[test]
+    fn room_snapshot_round_trip_and_legacy_default_preserve_terminal_identity() {
+        let mut state = state_with_workspaces(&["room"]);
+        state.workspaces[0]
+            .room
+            .post("persist me".into(), None, 12)
+            .unwrap();
+        let before = capture_from_state(&state);
+        let serialized = serde_json::to_string(&before).unwrap();
+        let restored = parse_snapshot(&serialized).unwrap();
+        assert_eq!(restored.workspaces[0].room, state.workspaces[0].room);
+        assert_eq!(restored.workspaces[0].id, before.workspaces[0].id);
+        assert_eq!(
+            restored.workspaces[0].public_tab_numbers,
+            before.workspaces[0].public_tab_numbers
+        );
+        assert_eq!(
+            restored.workspaces[0].tabs[0].root_pane,
+            before.workspaces[0].tabs[0].root_pane
+        );
+        for fixture in ["current-herdr", "current-herdr-dev", "legacy-pre-tabs-v2"] {
+            let old = parse_snapshot(session_fixture(fixture)).unwrap();
+            for workspace in old.workspaces {
+                assert_eq!(workspace.room, crate::room::Room::default());
+            }
+        }
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
     fn round_trip_empty_session() {
         let snap = SessionSnapshot {
             version: SNAPSHOT_VERSION,
@@ -664,6 +697,7 @@ mod tests {
 
         let snap = SessionSnapshot {
             workspaces: vec![WorkspaceSnapshot {
+                room: crate::room::Room::default(),
                 id: Some("wproj".to_string()),
                 custom_name: Some("pi-mono".to_string()),
                 identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
@@ -1226,6 +1260,7 @@ mod tests {
         let snap = SessionSnapshot {
             version: SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
+                room: crate::room::Room::default(),
                 id: Some("test-ws".to_string()),
                 custom_name: Some("fallback test".to_string()),
                 identity_cwd: PathBuf::from("/tmp"),

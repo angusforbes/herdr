@@ -13,6 +13,7 @@ mod navigator;
 mod onboarding;
 mod panes;
 mod release_notes;
+mod room;
 mod scrollbar;
 mod search_pane;
 mod settings;
@@ -195,7 +196,8 @@ fn desktop_tab_bar_and_terminal_area(
     ws: &crate::workspace::Workspace,
     main_area: Rect,
 ) -> (Rect, Rect) {
-    let hide_single_tab_bar = app.hide_tab_bar_when_single_tab && ws.tabs.len() == 1;
+    // The pinned room is a second surface even when only one terminal tab exists.
+    let hide_single_tab_bar = app.hide_tab_bar_when_single_tab && ws.tabs.is_empty();
     if !hide_single_tab_bar && main_area.height > 1 {
         match app.tab_bar_position {
             crate::config::TabBarPositionConfig::Top => {
@@ -320,6 +322,7 @@ fn compute_view_internal(
         workspace_card_areas,
         tab_bar_rect,
         tab_hit_areas: tab_bar_view.tab_hit_areas,
+        room_hit_area: tab_bar_view.room_hit_area,
         tab_scroll_left_hit_area: tab_bar_view.scroll_left_hit_area,
         tab_scroll_right_hit_area: tab_bar_view.scroll_right_hit_area,
         new_tab_hit_area: tab_bar_view.new_tab_hit_area,
@@ -331,6 +334,7 @@ fn compute_view_internal(
         split_borders,
         search_pane_rect,
     };
+    room::compute_room_view(app, terminal_area);
     app.sync_copy_mode_search_geometry();
 }
 
@@ -384,6 +388,7 @@ fn compute_mobile_view(
         workspace_card_areas: Vec::new(),
         tab_bar_rect: Rect::default(),
         tab_hit_areas: Vec::new(),
+        room_hit_area: Rect::default(),
         tab_scroll_left_hit_area: Rect::default(),
         tab_scroll_right_hit_area: Rect::default(),
         new_tab_hit_area: Rect::default(),
@@ -395,6 +400,7 @@ fn compute_mobile_view(
         split_borders,
         search_pane_rect: Rect::default(),
     };
+    room::compute_room_view(app, terminal_area);
     app.sync_copy_mode_search_geometry();
 }
 
@@ -857,7 +863,7 @@ mod tests {
     }
 
     #[test]
-    fn hide_tab_bar_when_single_tab_toggles_geometry_with_tab_count() {
+    fn room_keeps_tab_bar_visible_with_single_terminal_tab() {
         let mut app = crate::app::state::AppState::test_new();
         app.hide_tab_bar_when_single_tab = true;
         app.workspaces = vec![Workspace::test_new("one")];
@@ -867,10 +873,10 @@ mod tests {
 
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
         let single_tab_terminal_area = app.view.terminal_area;
-        assert_eq!(app.view.tab_bar_rect, Rect::default());
-        assert_eq!(single_tab_terminal_area, Rect::new(26, 0, 54, 20));
-        assert!(app.view.tab_hit_areas.is_empty());
-        assert_eq!(app.view.new_tab_hit_area, Rect::default());
+        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 0, 54, 1));
+        assert_eq!(single_tab_terminal_area, Rect::new(26, 1, 54, 19));
+        assert_eq!(app.view.tab_hit_areas.len(), 1);
+        assert!(app.view.room_hit_area.width > 0);
 
         app.workspaces[0].test_add_tab(Some("logs"));
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
@@ -885,13 +891,13 @@ mod tests {
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
 
         assert_eq!(app.view.terminal_area, single_tab_terminal_area);
-        assert_eq!(app.view.tab_bar_rect, Rect::default());
-        assert!(app.view.tab_hit_areas.is_empty());
-        assert_eq!(app.view.new_tab_hit_area, Rect::default());
+        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 0, 54, 1));
+        assert_eq!(app.view.tab_hit_areas.len(), 1);
+        assert!(app.view.room_hit_area.width > 0);
     }
 
     #[test]
-    fn bottom_tab_bar_still_hides_when_single_tab() {
+    fn room_keeps_bottom_tab_bar_visible_with_single_terminal_tab() {
         let mut app = crate::app::state::AppState::test_new();
         app.hide_tab_bar_when_single_tab = true;
         app.tab_bar_position = crate::config::TabBarPositionConfig::Bottom;
@@ -901,15 +907,15 @@ mod tests {
         app.mode = Mode::Prefix;
 
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
-        assert_eq!(app.view.tab_bar_rect, Rect::default());
-        assert_eq!(app.view.terminal_area, Rect::new(26, 0, 54, 20));
+        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 19, 54, 1));
+        assert_eq!(app.view.terminal_area, Rect::new(26, 0, 54, 19));
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal.draw(|frame| render(&app, frame)).unwrap();
         let mode_row = buffer_row_text(
             terminal.backend().buffer(),
-            app.view.terminal_area,
-            app.view.terminal_area.y + app.view.terminal_area.height - 1,
+            app.view.tab_bar_rect,
+            app.view.tab_bar_rect.y,
         );
         assert!(mode_row.contains("PREFIX"), "{mode_row}");
     }
@@ -944,7 +950,7 @@ mod tests {
         let one_tab_size = app.workspaces[0].tabs[0].runtimes[&one_tab_pane].current_size();
         let two_tab_size =
             app.workspaces[1].tabs[background_tab].runtimes[&two_tab_pane].current_size();
-        assert_eq!(one_tab_size, (20, 53));
+        assert_eq!(one_tab_size, (19, 53));
         assert_eq!(two_tab_size, (19, 53));
     }
 

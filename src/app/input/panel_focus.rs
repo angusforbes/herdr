@@ -78,6 +78,7 @@ impl App {
     /// accepts text/other keys. Prefix and modal controls retain their semantics.
     pub(crate) fn panel_arrow_targets_terminal(&self, key: &TerminalKey) -> bool {
         self.state.popup_pane.is_none()
+            && !self.state.room_active()
             && matches!(self.state.mode, Mode::Navigate | Mode::SearchPane)
             && matches!(key.code, KeyCode::Up | KeyCode::Down)
             && key.modifiers.is_empty()

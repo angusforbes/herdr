@@ -322,6 +322,7 @@ impl AppState {
         let Some(tab_idx) = ws.find_tab_index_for_pane(pane_id) else {
             return false;
         };
+        self.room_ui.visible = false;
         let previous = self.current_pane_focus_target();
         let target = PaneFocusTarget {
             workspace_id: ws.id.clone(),
@@ -1120,6 +1121,7 @@ impl AppState {
 
     pub fn switch_workspace(&mut self, idx: usize) {
         if idx < self.workspaces.len() {
+            self.room_ui.visible = false;
             let previous_focus = self.current_pane_focus_target();
             self.active = Some(idx);
             self.selected = idx;
@@ -1153,6 +1155,7 @@ impl AppState {
             return false;
         }
 
+        self.room_ui.visible = false;
         let previous_focus = self.current_pane_focus_target();
         let workspace_changed = self.active != Some(ws_idx);
         self.active = Some(ws_idx);
@@ -1760,6 +1763,7 @@ impl AppState {
         );
         self.tab_scroll = layout.scroll;
         self.view.tab_hit_areas = layout.tab_hit_areas;
+        self.view.room_hit_area = layout.room_hit_area;
         self.view.tab_scroll_left_hit_area = layout.scroll_left_hit_area;
         self.view.tab_scroll_right_hit_area = layout.scroll_right_hit_area;
         self.view.new_tab_hit_area = layout.new_tab_hit_area;

@@ -811,6 +811,7 @@ pub struct ViewState {
     pub workspace_card_areas: Vec<WorkspaceCardArea>,
     pub tab_bar_rect: Rect,
     pub tab_hit_areas: Vec<Rect>,
+    pub room_hit_area: Rect,
     pub tab_scroll_left_hit_area: Rect,
     pub tab_scroll_right_hit_area: Rect,
     pub new_tab_hit_area: Rect,
@@ -1376,6 +1377,7 @@ pub enum TabBarStatusSegment {
 }
 
 pub struct AppState {
+    pub room_ui: super::room::RoomPresentation,
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
     /// Terminal ids whose size is currently owned by a direct attach client.
@@ -1879,6 +1881,7 @@ impl AppState {
             workspace_scroll: 0,
             agent_panel_scroll: 0,
             navigate_agents: false,
+            room_ui: super::room::RoomPresentation::default(),
             tab_scroll: 0,
             tab_scroll_follow_active: true,
             mobile_switcher_scroll: 0,
@@ -1888,6 +1891,7 @@ impl AppState {
                 workspace_card_areas: Vec::new(),
                 tab_bar_rect: Rect::default(),
                 tab_hit_areas: Vec::new(),
+                room_hit_area: Rect::default(),
                 tab_scroll_left_hit_area: Rect::default(),
                 tab_scroll_right_hit_area: Rect::default(),
                 new_tab_hit_area: Rect::default(),

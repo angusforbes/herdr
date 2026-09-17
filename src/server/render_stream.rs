@@ -546,6 +546,19 @@ mod render_scale_benchmark {
         app_with(vec![workspace])
     }
 
+    fn app_with_room(pane_count: usize) -> AppState {
+        let mut app = app_with_active_panes(pane_count);
+        // Exercise bounded full history, with the active terminal panes hidden.
+        for _ in 0..crate::room::MAX_MESSAGES {
+            app.workspaces[0]
+                .room
+                .post("room history ".repeat(100), None, 0)
+                .unwrap();
+        }
+        app.select_room();
+        app
+    }
+
     fn app_with(workspaces: Vec<Workspace>) -> AppState {
         let mut app = AppState::test_new();
         app.mode = Mode::Terminal;
@@ -634,6 +647,10 @@ mod render_scale_benchmark {
         print_profiles(
             "active panes (one workspace)",
             profile_cardinalities(app_with_active_panes),
+        );
+        print_profiles(
+            "room selected (1000 messages, populated hidden panes)",
+            profile_cardinalities(app_with_room),
         );
     }
 }

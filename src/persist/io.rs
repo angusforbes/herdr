@@ -83,6 +83,13 @@ pub(super) fn clear_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Checked structural save for room transactions. Acknowledges atomic file replacement,
+/// not power-loss durability (the existing session writer does not fsync).
+/// The caller must join any background session writer before calling this.
+pub fn save_checked(snapshot: &SessionSnapshot) -> std::io::Result<()> {
+    save_to_path(&session_path(), snapshot)
+}
+
 pub fn save(snapshot: &SessionSnapshot, history: Option<&SessionHistorySnapshot>) {
     let path = session_path();
     let history_path = session_history_path();

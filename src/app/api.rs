@@ -9,6 +9,7 @@ mod pane_graphics;
 mod panes;
 pub(crate) mod plugins;
 mod responses;
+mod rooms;
 mod session;
 mod tabs;
 mod workspaces;
@@ -1014,6 +1015,10 @@ impl App {
                     },
                 );
             }
+            Method::RoomGet(params) => return self.handle_room_get(request.id, params),
+            Method::RoomRead(params) => return self.handle_room_read(request.id, params),
+            Method::RoomPost(params) => return self.handle_room_post(request.id, params),
+            Method::RoomReply(params) => return self.handle_room_reply(request.id, params),
             Method::SessionSnapshot(_) => return self.handle_session_snapshot(request.id),
             Method::WorkspaceList(_) => return self.handle_workspace_list(request.id),
             Method::WorkspaceGet(target) => return self.handle_workspace_get(request.id, target),

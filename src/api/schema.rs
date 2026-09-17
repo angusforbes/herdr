@@ -7,6 +7,7 @@ pub mod integrations;
 pub mod panes;
 pub mod plugins;
 pub mod response;
+pub mod rooms;
 pub mod server;
 pub mod session;
 pub mod tabs;
@@ -20,6 +21,7 @@ pub use integrations::*;
 pub use panes::*;
 pub use plugins::*;
 pub use response::*;
+pub use rooms::*;
 pub use server::*;
 pub use session::*;
 pub use tabs::*;
@@ -63,6 +65,14 @@ pub enum Method {
     ClientWindowTitleClear(EmptyParams),
     #[serde(rename = "session.snapshot")]
     SessionSnapshot(EmptyParams),
+    #[serde(rename = "room.get")]
+    RoomGet(WorkspaceTarget),
+    #[serde(rename = "room.read")]
+    RoomRead(RoomReadParams),
+    #[serde(rename = "room.post")]
+    RoomPost(RoomPostParams),
+    #[serde(rename = "room.reply")]
+    RoomReply(RoomReplyParams),
     #[serde(rename = "workspace.create")]
     WorkspaceCreate(WorkspaceCreateParams),
     #[serde(rename = "workspace.list")]

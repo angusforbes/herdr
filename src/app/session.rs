@@ -11,6 +11,47 @@ enum SessionSaveJob {
 }
 
 impl App {
+    /// Room writes are rare explicit transactions, never render work. Join the
+    /// previous snapshot writer so it cannot overwrite the newer room version.
+    pub(crate) fn save_room_candidate(
+        &mut self,
+        index: usize,
+        candidate: crate::room::Room,
+    ) -> Result<&'static str, String> {
+        self.save_room_candidate_with(index, candidate, crate::persist::save_checked)
+    }
+
+    pub(crate) fn save_room_candidate_with(
+        &mut self,
+        index: usize,
+        candidate: crate::room::Room,
+        save: impl FnOnce(&crate::persist::SessionSnapshot) -> std::io::Result<()>,
+    ) -> Result<&'static str, String> {
+        if let Some(thread) = self.session_save_thread.take() {
+            thread
+                .join()
+                .map_err(|_| "previous session writer panicked".to_string())?;
+        }
+        if self.no_session {
+            self.state.workspaces[index].room = candidate;
+            return Ok("memory_only");
+        }
+        let mut snapshot = crate::persist::capture(
+            &self.state.workspaces,
+            &self.state.terminals,
+            &self.terminal_runtimes,
+            self.state.active,
+            self.state.selected,
+            self.state.sidebar_width,
+            self.state.sidebar_section_split,
+            self.state.collapsed_space_keys.clone(),
+        );
+        snapshot.workspaces[index].room = candidate.clone();
+        save(&snapshot).map_err(|error| format!("room not saved: {error}"))?;
+        self.state.workspaces[index].room = candidate;
+        Ok("saved")
+    }
+
     pub(super) fn schedule_session_save(&mut self) {
         if !self.no_session {
             self.session_save_deadline = Some(Instant::now() + SESSION_SAVE_DEBOUNCE);
@@ -18,6 +59,7 @@ impl App {
     }
 
     pub(crate) fn sync_session_save_schedule(&mut self) {
+        self.refresh_room_members();
         if self.state.session_dirty {
             self.state.session_dirty = false;
             self.schedule_session_save();

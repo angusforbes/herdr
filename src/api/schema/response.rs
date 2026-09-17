@@ -42,6 +42,24 @@ pub struct ErrorBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
+    RoomInfo {
+        room_id: String,
+        workspace_id: String,
+        members: Vec<crate::room::Member>,
+        next_sequence: u64,
+        outbound_delivery: String,
+    },
+    RoomMessages {
+        room_id: String,
+        messages: Vec<crate::room::Message>,
+        next_sequence: u64,
+    },
+    RoomWritten {
+        room_id: String,
+        sequence: u64,
+        persistence: String,
+        outbound_delivery: String,
+    },
     Pong {
         version: String,
         protocol: u32,
