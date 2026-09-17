@@ -1378,6 +1378,8 @@ pub enum TabBarStatusSegment {
 
 pub struct AppState {
     pub room_ui: super::room::RoomPresentation,
+    /// Inactive workspace presentations, keyed by stable ID; never persisted.
+    pub(crate) room_presentations: std::collections::HashMap<String, super::room::RoomPresentation>,
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
     /// Terminal ids whose size is currently owned by a direct attach client.
@@ -1882,6 +1884,7 @@ impl AppState {
             agent_panel_scroll: 0,
             navigate_agents: false,
             room_ui: super::room::RoomPresentation::default(),
+            room_presentations: Default::default(),
             tab_scroll: 0,
             tab_scroll_follow_active: true,
             mobile_switcher_scroll: 0,

@@ -322,13 +322,14 @@ impl AppState {
         let Some(tab_idx) = ws.find_tab_index_for_pane(pane_id) else {
             return false;
         };
-        self.room_ui.visible = false;
         let previous = self.current_pane_focus_target();
         let target = PaneFocusTarget {
             workspace_id: ws.id.clone(),
             pane_id,
         };
         if previous.as_ref() == Some(&target) {
+            self.sync_room_workspace();
+            self.room_ui.visible = false;
             return false;
         }
 
@@ -1121,9 +1122,9 @@ impl AppState {
 
     pub fn switch_workspace(&mut self, idx: usize) {
         if idx < self.workspaces.len() {
-            self.room_ui.visible = false;
             let previous_focus = self.current_pane_focus_target();
             self.active = Some(idx);
+            self.sync_room_workspace();
             self.selected = idx;
             let workspace_id = self.workspaces[idx].id.clone();
             crate::logging::workspace_focused(&workspace_id);
@@ -1155,10 +1156,11 @@ impl AppState {
             return false;
         }
 
-        self.room_ui.visible = false;
         let previous_focus = self.current_pane_focus_target();
         let workspace_changed = self.active != Some(ws_idx);
         self.active = Some(ws_idx);
+        self.sync_room_workspace();
+        self.room_ui.visible = false;
         self.selected = ws_idx;
         let workspace_id = self.workspaces[ws_idx].id.clone();
         if workspace_changed {
@@ -1741,6 +1743,7 @@ impl AppState {
             self.tab_scroll_follow_active = true;
             self.refresh_tab_bar_view();
         }
+        self.sync_room_workspace();
     }
 
     pub(crate) fn refresh_tab_bar_view(&mut self) {
@@ -3408,6 +3411,7 @@ impl AppState {
         } else {
             self.remove_unattached_terminal_ids(pane_terminal_id);
         }
+        self.sync_room_workspace();
     }
 }
 
@@ -4759,6 +4763,29 @@ mod tests {
         let cards = crate::ui::compute_workspace_card_areas(&state, state.view.sidebar_rect);
         assert!(cards.iter().any(|card| card.ws_idx == 0));
         state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn room_pane_death_restores_survivor_without_reusing_closed_presentation() {
+        let mut state = app_with_workspaces(&["a", "b"]);
+        state.switch_workspace(1);
+        state.select_room();
+        state.insert_room_text("B draft");
+        state.switch_workspace(0);
+        state.select_room();
+        state.insert_room_text("A draft");
+        let closed_id = state.workspaces[0].id.clone();
+        let pane_id = state.workspaces[0].focused_pane_id().unwrap();
+        state.handle_pane_died(pane_id);
+        assert!(state.room_active());
+        assert_eq!(state.room_ui.composer, "B draft");
+        assert!(!state.room_presentations.contains_key(&closed_id));
+        state.assert_invariants_for_test();
+        let pane_id = state.workspaces[0].focused_pane_id().unwrap();
+        state.handle_pane_died(pane_id);
+        assert!(!state.room_active());
+        assert!(state.room_ui.workspace.is_none());
+        assert!(state.room_presentations.is_empty());
     }
 
     #[test]

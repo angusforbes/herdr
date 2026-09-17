@@ -25,6 +25,13 @@ herdr server live-handoff --import-exe ~/.local/bin/herdr
 
 ## Sessions
 
+### Room workspace presentation memory (uncommitted)
+
+- Workspace-only navigation restores that stable workspace ID's last room/terminal surface. Inactive `RoomPresentation` values retain composer draft, editor/history/undo, transcript cache and scroll; transient selection/drag and refresh timestamp are cleared on departure.
+- Explicit pane/agent/tab focus hides only the destination room, after saving the source presentation. Esc and room toggle remember terminal view while retaining the draft. Workspace deletion/pane death evict closed IDs; reorder keeps stable ownership. Pane-move completion/recovery also reconciles presentation.
+- TUI-only, in-memory cache in `AppState`; no room runtime/API semantics or restart persistence changed. Existing clipboard/header, sidebar and reload-cache work preserved. No commit or deployment.
+- Focused validation: 72 `room_`, 286 `workspace`, and 2 `tab_focus` tests passed before adding the pane-death regression; final rerun recorded by the implementing agent. Tests cover independent drafts/history/scroll, cross-workspace explicit focus, Esc/toggle on both input routes, reorder/close and fresh replacement IDs. Tool shims require `mise x just@1.58.0 zig@0.15.2 aqua:nextest-rs/nextest/cargo-nextest@0.9.144 -- just test-one <filter>`.
+
 ### 2026-09-14 — Halyard (claude-fable-5-1): sidebar space selection (`09a042c`)
 
 **What:** workspace circles in the left sidebar are selection indicators. `●` = the space's agents
@@ -260,3 +267,7 @@ The existing sidebar highlights every current active-workspace agent using const
 Preserved prior Pi editor/input/layout and parent autojoin edits. The only `parity_tests.rs` adjustment replaces its obsolete stale-recipient send-failure fixture with the existing injected persistence failure, retaining history/undo assertions; no editor/parity rewrite. Updated equivalent obsolete UX/input expectations and added broadcast delivery/non-fanout and room/sidebar render regressions.
 
 Verification: **66 room tests**, **141 sidebar tests**, debug build, `cargo fmt --check`, and `git diff --check` pass. A bounded debug fixed-geometry render profile (not release or baseline comparison) at 1/15/50 panes reports room medians **5674/5691/5766 µs**, 15:1 **1.003×**; background workspace **5296/5844/6129 µs**, active pane **5272/7395/10433 µs**. Release profiling/full suite were not rerun to keep this requested follow-up bounded. No known focused-test blocker; human physical UI validation remains outstanding. No commit, install, deployment, child agents or global edits.
+
+### Parent transcript/clipboard/sidebar verification
+
+Agent headers now contain only stored author name + pane ID; human rows have no header and highlighted background. Clipboard defect reproduced before fix: room mouse release ignored normal copy_on_select. Now copies via existing foreground-client clipboard route, with regression exercising ServerMessage::Clipboard and decoded OSC52 bytes (not proof of physical clipboard acceptance). Parent finished restoring normal configured sidebar rows/heights while retaining room-member highlighting, and reran 73 room tests + prior 141 sidebar tests successfully. Full parent suite: 3589 passed, same 8 baseline failures, 1 skipped; `/tmp/room-polish-parent-tests.log`. Workspace view-memory behavior tested by builder and parent room suite. Pending changes also include previously live-installed reload-cache loader fix with 11 Python tests verified earlier. No new deployment/commit yet.

@@ -32,7 +32,15 @@ class PiStartupTests(unittest.TestCase):
     def test_real_loader_registers_commands_with_optout_then_enable_disable_reload(self):
         self.check_loader(startup_optin=False)
 
-    def check_loader(self, startup_optin):
+    @unittest.skipUnless(shutil.which("pi"), "installed Pi required")
+    def test_hot_update_cached_optin_receiver_then_reload(self):
+        self.check_loader(startup_optin=True, hot_update=True)
+
+    @unittest.skipUnless(shutil.which("pi"), "installed Pi required")
+    def test_hot_update_preserves_explicit_optout(self):
+        self.check_loader(startup_optin=False, hot_update=True)
+
+    def check_loader(self, startup_optin, hot_update=False):
         with tempfile.TemporaryDirectory(prefix="room-pi-load-") as directory:
             base = Path(directory)
             source = base / "source"
@@ -44,6 +52,36 @@ class PiStartupTests(unittest.TestCase):
                 env["HERDR_ROOM_ENABLED"] = "0"
             env.update(HERDR_ENV="1", HERDR_PANE_ID="w1.p1", HERDR_WORKSPACE_ID="w1", TERM="xterm-256color")
             env.pop("PI_PACKAGE_DIR", None)
+            if hot_update:
+                extension = Path(env["PI_CODING_AGENT_DIR"]) / "extensions/herdr-room"
+                entry = extension / "index.ts"
+                receiver = extension / "receiver.mjs"
+                current_entry = entry.read_text()
+                current_receiver = receiver.read_text()
+                # Simulate the pre-autojoin deployment, not a fresh process
+                # loading an already-updated dependency. Keep its real transport.
+                old_policy = 'env.HERDR_ROOM_ENABLED === "1"'
+                default_policy = ('env.HERDR_ROOM_ENABLED !== "0"\n'
+                                  '      && env.HERDR_SOCKET_PATH?.startsWith("/") === true\n'
+                                  '      && string(env.HERDR_PANE_ID)')
+                self.assertIn(default_policy, current_receiver)
+                constructor_log = base / "constructors.jsonl"
+                def instrument(text, revision):
+                    return ('import { appendFileSync } from "node:fs";\n' + text.replace(
+                        '    this.pi = pi;',
+                        '    appendFileSync(' + json.dumps(str(constructor_log)) + ', JSON.stringify('
+                        + '{ revision: ' + json.dumps(revision)
+                        + ', enabled: env.HERDR_ROOM_ENABLED ?? null }) + "\\n");\n'
+                        + '    this.pi = pi;'))
+                receiver.write_text(instrument(current_receiver.replace(default_policy, old_policy), "old"))
+                current_receiver = instrument(current_receiver, "new")
+                entry.write_text('import { RoomReceiver, registerRoomLifecycle } from "./receiver.mjs";\n'
+                                 'export default function(pi) {\n'
+                                 '  const receiver = new RoomReceiver(pi, process.env);\n'
+                                 '  registerRoomLifecycle(pi, receiver);\n'
+                                 '}\n')
+                if startup_optin:
+                    env.pop("HERDR_ROOM_ENABLED", None)
             endpoint = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             endpoint.bind(env["HERDR_SOCKET_PATH"])
             endpoint.listen()
@@ -73,10 +111,13 @@ class PiStartupTests(unittest.TestCase):
                                 member["session"] = "Path:" + params["agent_session_path"] if params.get("agent_session_path") else "Id:" + params["agent_session_id"]
                                 result = {}
                             elif req["method"] == "room.get":
+                                if params != {"workspace_id": env["HERDR_WORKSPACE_ID"]}:
+                                    raise AssertionError("receiver did not use explicit workspace")
                                 result = {"members": [dict(member)] if member["session"] else []}
                             elif req["method"] == "room.delivery.register":
-                                if params["session"] != member["session"]:
-                                    raise AssertionError("receiver did not use live hook identity")
+                                if (params["workspace_id"] != env["HERDR_WORKSPACE_ID"] or
+                                    any(params[key] != member[key] for key in ("pane_id", "terminal_id", "session"))):
+                                    raise AssertionError("receiver did not use exact live hook identity")
                                 result = {"receiver_id": "r1", "server_epoch": "e1"}
                             elif req["method"] == "room.delivery.claim":
                                 result = {"delivery": None}
@@ -109,6 +150,20 @@ class PiStartupTests(unittest.TestCase):
                 os.write(master, b'\r')
 
             try:
+                if hot_update:
+                    drain_for(5)
+                    self.assertIn("pane.report_agent_session", requests)
+                    self.assertFalse(any(r.startswith("room.") for r in requests))
+                    receiver.write_text(current_receiver)
+                    entry.write_text(current_entry)
+                    command('/reload')
+                    drain_for(4)
+                    self.assertIn(b'Reloaded keybindings', output)
+                    constructors = [json.loads(line) for line in constructor_log.read_text().splitlines()]
+                    self.assertEqual([c["revision"] for c in constructors], ["old", "old"],
+                                     "installed Pi keeps the native .mjs constructor cached across reload")
+                    self.assertEqual(constructors[0]["enabled"], None if startup_optin else "0")
+                    self.assertEqual(constructors[1]["enabled"], "1" if startup_optin else "0")
                 if not startup_optin:
                     drain_for(5)
                     self.assertIn("pane.report_agent_session", requests)
@@ -133,6 +188,8 @@ class PiStartupTests(unittest.TestCase):
                 self.assertIn("room.delivery.register", requests)
                 self.assertNotIn("room.reply", requests)
                 self.assertNotIn("room.post", requests)
+                self.assertNotIn("room.read", requests)
+                self.assertNotIn("workspace.list", requests)
                 self.assertTrue(member["session"].startswith("Path:" + directory))
                 self.assertEqual(failures, [])
                 if not startup_optin:

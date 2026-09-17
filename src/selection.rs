@@ -330,9 +330,12 @@ pub fn write_osc52_bytes(bytes: &[u8]) {
         return;
     }
 
-    let sequence = osc52_sequence(bytes);
-    let _ = std::io::stdout().write_all(sequence.as_bytes());
-    let _ = std::io::stdout().flush();
+    let _ = write_osc52_to(&mut std::io::stdout(), bytes);
+}
+
+pub(crate) fn write_osc52_to(writer: &mut impl Write, bytes: &[u8]) -> std::io::Result<()> {
+    writer.write_all(osc52_sequence(bytes).as_bytes())?;
+    writer.flush()
 }
 
 #[cfg(test)]

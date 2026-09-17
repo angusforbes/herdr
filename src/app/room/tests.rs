@@ -4,6 +4,8 @@ mod delivery_tests;
 mod parity_tests;
 #[path = "ux_tests.rs"]
 mod ux_tests;
+#[path = "workspace_tests.rs"]
+mod workspace_tests;
 use super::*;
 use crate::{api::schema::*, raw_input::RawInputEvent, workspace::Workspace};
 use ratatui::layout::Rect;
@@ -551,8 +553,8 @@ async fn room_api_focus_and_move_leave_the_correct_surface_active() {
         }),
     );
     assert!(
-        !app.state.room_active(),
-        "workspace focus must not revive an old room selection"
+        app.state.room_active(),
+        "workspace focus restores its previous room selection"
     );
 
     // A background move keeps the source room; a focused move selects terminals.

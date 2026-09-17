@@ -10556,6 +10556,116 @@ next_tab = ""
         );
     }
 
+    #[tokio::test]
+    async fn room_mouse_copy_reaches_foreground_client_wire() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut server = test_headless_server();
+        let (writer, control, _render) = test_client_writer();
+        server.clients.insert(
+            42,
+            ClientConnection::new(
+                (120, 40),
+                Default::default(),
+                Default::default(),
+                None,
+                42,
+                RenderEncoding::SemanticFrame,
+                Some(writer),
+            ),
+        );
+        server.foreground_client_id = Some(42);
+        server.sync_foreground_client_state();
+        server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("room")];
+        server.app.state.active = Some(0);
+        server.app.state.ensure_test_terminals();
+        let pane = server.app.state.workspaces[0].focused_pane_id().unwrap();
+        let id = server.app.state.workspaces[0]
+            .terminal_id(pane)
+            .unwrap()
+            .clone();
+        let (runtime, mut pty) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        server.app.terminal_runtimes.insert(id, runtime);
+        server.app.state.workspaces[0]
+            .room
+            .post("a界e\u{301}Z\nsecond 👩‍💻!".into(), None, 0)
+            .unwrap();
+        server.app.state.select_room();
+        crate::ui::compute_view(&mut server.app.state, Rect::new(0, 0, 120, 40));
+        let area = server.app.state.room_ui.transcript_area;
+        let row = server
+            .app
+            .state
+            .room_ui
+            .transcript_lines
+            .iter()
+            .position(|s| s == "a界e\u{301}Z")
+            .unwrap() as u16;
+        assert!(server.app.state.copy_on_select, "default must auto-copy");
+        for (kind, x, y) in [
+            (
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.y + row,
+            ),
+            (
+                MouseEventKind::Drag(MouseButton::Left),
+                area.x + 7,
+                area.y + row + 1,
+            ),
+            (
+                MouseEventKind::Up(MouseButton::Left),
+                area.x + 7,
+                area.y + row + 1,
+            ),
+        ] {
+            server.app.route_client_events_from(
+                42,
+                vec![crate::raw_input::RawInputEvent::Mouse(MouseEvent {
+                    kind,
+                    column: x,
+                    row: y,
+                    modifiers: KeyModifiers::NONE,
+                })],
+                false,
+            );
+        }
+        server.drain_internal_events_with_forwarding_up_to(128);
+        let message = read_server_message(
+            control
+                .recv_timeout(Duration::from_millis(100))
+                .expect("room mouse release must reach attached foreground client"),
+        );
+        match message {
+            ServerMessage::Clipboard { data } => {
+                use base64::Engine;
+                let expected = "界e\u{301}Z\nsecond ".as_bytes();
+                assert_eq!(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(&data)
+                        .unwrap(),
+                    expected
+                );
+                let mut output = Vec::new();
+                crate::client::forward_clipboard_with(&data, |bytes| {
+                    crate::selection::write_osc52_to(&mut output, bytes).unwrap();
+                });
+                assert_eq!(
+                    output,
+                    format!(
+                        "\x1b]52;c;{}\x07",
+                        base64::engine::general_purpose::STANDARD.encode(expected)
+                    )
+                    .as_bytes()
+                );
+            }
+            other => panic!("expected clipboard, got {other:?}"),
+        }
+        assert!(
+            pty.try_recv().is_err(),
+            "room mouse must never reach hidden PTY"
+        );
+    }
+
     #[test]
     fn clipboard_write_targets_foreground_client_only() {
         let mut server = test_headless_server();

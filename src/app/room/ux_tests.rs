@@ -199,8 +199,10 @@ async fn room_failed_send_preserves_cursor_and_multiline_draft() {
 
 #[tokio::test]
 async fn room_selection_reversed_unicode_highlight_clipboard_and_isolation() {
-    for reverse in [false, true] {
+    for (reverse, auto_copy) in [(false, true), (true, true), (false, false), (true, false)] {
         let mut app = app();
+        assert!(app.state.copy_on_select);
+        app.state.copy_on_select = auto_copy;
         let id = app.state.workspaces[0]
             .terminal_id(app.state.workspaces[0].focused_pane_id().unwrap())
             .unwrap()
@@ -226,7 +228,25 @@ async fn room_selection_reversed_unicode_highlight_clipboard_and_isolation() {
         let (a, b) = if reverse { (end, start) } else { (start, end) };
         mouse(&mut app, MouseEventKind::Down(MouseButton::Left), a);
         mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), b);
+        assert!(app.event_rx.try_recv().is_err(), "drag alone must not copy");
         mouse(&mut app, MouseEventKind::Up(MouseButton::Left), b);
+        if auto_copy {
+            match app
+                .event_rx
+                .try_recv()
+                .expect("release auto-copies by default")
+            {
+                crate::events::AppEvent::ClipboardWrite { content } => {
+                    assert_eq!(content, "界e\u{301}Z\nsecond ".as_bytes())
+                }
+                other => panic!("{other:?}"),
+            }
+        } else {
+            assert!(
+                app.event_rx.try_recv().is_err(),
+                "disabled auto-copy retains selection only"
+            );
+        }
         let selection = app.state.room_ui.selection.unwrap();
         assert!(!selection.dragging);
         assert_eq!(
@@ -269,7 +289,9 @@ async fn room_selection_reversed_unicode_highlight_clipboard_and_isolation() {
             MouseEventKind::Up(MouseButton::Left),
             Position::new(end.x + 2, end.y),
         );
-        key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        if !auto_copy {
+            key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        }
         match app.event_rx.try_recv().unwrap() {
             crate::events::AppEvent::ClipboardWrite { content } => {
                 assert_eq!(content, "👩‍💻".as_bytes())

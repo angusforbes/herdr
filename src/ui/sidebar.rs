@@ -599,24 +599,7 @@ fn agent_row_active(app: &AppState, entry: &AgentPanelEntry) -> bool {
 }
 
 fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<ResolvedToken>> {
-    if app.room_active() {
-        if let Some((name, workspace, number)) = room_agent_identity(app, entry) {
-            return vec![vec![
-                ResolvedToken {
-                    kind: ResolvedTokenKind::Workspace(name.to_owned()),
-                    style: Default::default(),
-                    rich: None,
-                },
-                ResolvedToken {
-                    kind: ResolvedTokenKind::Pane(crate::workspace::public_pane_id_for_number(
-                        workspace, number,
-                    )),
-                    style: Default::default(),
-                    rich: None,
-                },
-            ]];
-        }
-    }
+    // Room membership changes highlighting, never configured row content/layout.
     let label = entry
         .state_labels
         .get(agent_panel_status_key(entry.state, entry.seen))
@@ -2556,7 +2539,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn room_sidebar_compacts_agents_highlights_current_members_and_restores_custom_rows() {
+    fn room_sidebar_preserves_custom_rows_and_highlights_current_members() {
         use crate::config::AgentSidebarToken as Token;
         let (mut app, _, _) = collapsed_agent_app();
         app.active = Some(0);
@@ -2606,12 +2589,16 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             assert_eq!(agent_row_active(&app, entry), expected);
             assert_eq!(buffer[(0, y)].bg == app.palette.active_row_bg, expected);
             highlighted += usize::from(expected);
-            if let Some((name, ws, number)) = member {
-                let text = row_text(&buffer, y, area.width);
-                assert!(text.contains(name));
-                assert!(text.contains(&crate::workspace::public_pane_id_for_number(ws, number)));
-                assert!(!text.contains("CUSTOM-"));
-                assert_eq!(agent_entry_height_in_body(&app, entry, area.height), 1);
+            if member.is_some() {
+                assert_eq!(agent_entry_height_in_body(&app, entry, area.height), 2);
+                for row in y..y + 2 {
+                    assert_eq!(
+                        row_text(&buffer, row, area.width),
+                        row_text(&before, row, area.width)
+                    );
+                }
+                assert!(row_text(&buffer, y, area.width).contains("CUSTOM-TOPIC"));
+                assert!(row_text(&buffer, y + 1, area.width).contains("CUSTOM-MODEL"));
             }
             y += agent_entry_height_in_body(&app, entry, area.height);
         }

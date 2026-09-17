@@ -2318,12 +2318,17 @@ fn decode_clipboard_payload(data: &str) -> Option<Vec<u8>> {
 
 /// Forwards a clipboard write from the server to the local client clipboard.
 fn forward_clipboard(data: &str) {
+    forward_clipboard_with(data, crate::selection::write_osc52_bytes);
+}
+
+/// Keep decoding identical for local platform output and isolated client tests.
+pub(crate) fn forward_clipboard_with(data: &str, write: impl FnOnce(&[u8])) {
     let Some(bytes) = decode_clipboard_payload(data) else {
         warn!("received invalid clipboard payload from server");
         return;
     };
 
-    crate::selection::write_osc52_bytes(&bytes);
+    write(&bytes);
 }
 
 // ---------------------------------------------------------------------------

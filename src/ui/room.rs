@@ -38,41 +38,23 @@ pub(super) fn compute_room_view(app: &mut AppState, area: Rect, terminal_height:
     if ui.transcript_width != width || ui.transcript_messages > ws.room.messages.len() {
         ui.selection = None; // display-row coordinates cease to exist on rewrap
         ui.transcript_lines.clear();
+        ui.transcript_human.clear();
         ui.transcript_messages = 0;
         ui.transcript_width = width;
     }
     for message in ws.room.messages.iter().skip(ui.transcript_messages) {
-        let author = message
-            .author
-            .as_ref()
-            .map(|member| format!("{} ({})", member.name, member.pane_id))
-            .unwrap_or_else(|| "human".into());
-        let audience: Vec<_> = message
-            .recipients
-            .iter()
-            .chain(message.recipient.iter())
-            .map(|m| m.name.as_str())
-            .collect();
-        let destination = if audience.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " → {} [expires {}]",
-                audience.join(", "),
-                message.expires_unix.unwrap_or(0)
-            )
-        };
-        let correlation = message
-            .reply_to
-            .map(|n| format!(" · reply to #{n}"))
-            .unwrap_or_default();
-        wrap_into(
-            &format!("#{} {author}{destination}{correlation}", message.sequence),
-            width as usize,
-            &mut ui.transcript_lines,
-        );
+        if let Some(author) = &message.author {
+            wrap_into(
+                &format!("{} ({})", author.name, author.pane_id),
+                width as usize,
+                &mut ui.transcript_lines,
+            );
+        }
         wrap_into(&message.text, width as usize, &mut ui.transcript_lines);
+        ui.transcript_human
+            .resize(ui.transcript_lines.len(), message.author.is_none());
         ui.transcript_lines.push(String::new());
+        ui.transcript_human.push(false);
     }
     ui.transcript_messages = ws.room.messages.len();
     ui.scroll = ui.scroll.min(
@@ -126,6 +108,28 @@ fn room_areas(area: Rect, ui: &crate::app::room::RoomPresentation) -> [Rect; 3] 
 pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
     let ui = &app.room_ui;
     let [transcript, status, composer] = room_areas(area, ui);
+    // Paint full human message rows (including blank/padded cells), not just spans.
+    for (offset, human) in ui
+        .transcript_human
+        .iter()
+        .skip(ui.transcript_begin)
+        .take(transcript.height as usize)
+        .enumerate()
+    {
+        if *human {
+            frame.buffer_mut().set_style(
+                Rect::new(
+                    transcript.x,
+                    transcript.y + offset as u16,
+                    transcript.width,
+                    1,
+                ),
+                Style::default()
+                    .fg(app.palette.text)
+                    .bg(app.palette.surface0),
+            );
+        }
+    }
     let visible: Vec<_> = ui
         .transcript_lines
         .iter()
@@ -138,6 +142,13 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
                 .as_ref()
                 .map(|s| s.range(row, line.len()))
                 .unwrap_or(0..0);
+            let style = if ui.transcript_human.get(row) == Some(&true) {
+                Style::default()
+                    .fg(app.palette.text)
+                    .bg(app.palette.surface0)
+            } else {
+                Style::default()
+            };
             Line::from(vec![
                 Span::raw(&line[..range.start]),
                 Span::styled(
@@ -146,6 +157,7 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
                 ),
                 Span::raw(&line[range.end..]),
             ])
+            .style(style)
         })
         .collect();
     frame.render_widget(Paragraph::new(visible), transcript);
@@ -296,6 +308,77 @@ mod tests {
                 assert!(!text.contains(removed), "unexpected room chrome: {removed}");
             }
         }
+    }
+
+    #[test]
+    fn room_headers_and_human_background_are_conversation_only() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut app = AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("room")];
+        app.active = Some(0);
+        let author = crate::room::Member {
+            name: "Aporia".into(),
+            pane_id: "wB:p2".into(),
+            terminal_id: "t1".into(),
+            agent: "pi".into(),
+            session: Some("Id:original".into()),
+        };
+        app.workspaces[0]
+            .room
+            .post("question\n界".into(), Some(author.clone()), 0)
+            .unwrap();
+        app.workspaces[0]
+            .room
+            .reply(1, author, "answer".into(), 1)
+            .unwrap();
+        let stored = app.workspaces[0].room.clone();
+        app.select_room();
+        let area = Rect::new(0, 0, 80, 20);
+        compute_room_view(&mut app, area, area.height);
+        assert_eq!(
+            app.room_ui.transcript_lines,
+            ["question", "界", "", "Aporia (wB:p2)", "answer", ""]
+        );
+        assert_eq!(
+            app.room_ui.transcript_human,
+            [true, true, false, false, false, false]
+        );
+        use crate::app::room::selection::{Point, Selection};
+        app.room_ui.selection = Some(Selection {
+            anchor: Point { row: 0, byte: 0 },
+            end: Point { row: 4, byte: 6 },
+            dragging: false,
+        });
+        assert_eq!(
+            app.room_ui
+                .selection
+                .unwrap()
+                .text(&app.room_ui.transcript_lines)
+                .unwrap(),
+            "question\n界\n\nAporia (wB:p2)\nanswer"
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| render_room(&app, frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for row in [0, 1] {
+            assert_eq!(
+                buffer[(79, row)].bg,
+                app.palette.surface0,
+                "human row padding highlighted"
+            );
+            assert_eq!(buffer[(0, row)].bg, app.palette.surface0);
+            assert!(
+                buffer[(0, row)].modifier.contains(Modifier::REVERSED),
+                "selection distinct from background"
+            );
+        }
+        assert_ne!(buffer[(79, 3)].bg, app.palette.surface0);
+        assert_eq!(
+            app.workspaces[0].room, stored,
+            "presentation must not mutate history"
+        );
     }
 
     #[test]

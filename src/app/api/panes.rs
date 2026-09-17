@@ -952,6 +952,7 @@ impl App {
                 .record_pane_focus_change(previous_focus, target_ws_idx, moved_pane_id);
             self.state.settle_terminal_mode_after_focus();
         }
+        self.state.sync_room_workspace();
         let created_workspace = created_workspace.then(|| self.workspace_info(target_ws_idx));
         let created_tab = if created_tab {
             self.tab_info(target_ws_idx, target_tab_idx)
@@ -1079,6 +1080,7 @@ impl App {
             }
             self.state.workspaces.insert(insert_idx, workspace);
         }
+        self.state.sync_room_workspace();
         self.state.mark_session_dirty();
         self.schedule_session_save();
     }

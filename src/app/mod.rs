@@ -539,6 +539,7 @@ impl App {
 
         let mut state = AppState {
             room_ui: room::RoomPresentation::default(),
+            room_presentations: Default::default(),
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),

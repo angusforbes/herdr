@@ -17,6 +17,8 @@ pub struct RoomPresentation {
     pub workspace: Option<String>,
     pub visible: bool,
     pub transcript_lines: Vec<String>,
+    /// Parallel display-row roles; rebuilt/appended together with cached text.
+    pub transcript_human: Vec<bool>,
     pub transcript_width: u16,
     pub transcript_messages: usize,
     pub composer: String,
@@ -102,18 +104,52 @@ impl AppState {
                 .is_some_and(|ws| self.room_ui.workspace.as_deref() == Some(ws.id.as_str()))
     }
 
-    pub(crate) fn select_room(&mut self) {
-        let Some(index) = self.active else { return };
-        let Some(ws) = self.workspaces.get(index) else {
+    /// Reconcile after workspace navigation or removal. The outgoing owner is
+    /// carried by the presentation itself, so index shifts cannot misattribute it.
+    pub(crate) fn sync_room_workspace(&mut self) {
+        self.room_presentations
+            .retain(|id, _| self.workspaces.iter().any(|ws| ws.id == *id));
+        let workspace = self
+            .active
+            .and_then(|index| self.workspaces.get(index))
+            .map(|ws| ws.id.clone());
+        if self.room_ui.workspace == workspace {
             return;
-        };
-        if self.room_ui.workspace.as_deref() != Some(ws.id.as_str()) {
-            self.room_ui = RoomPresentation {
-                workspace: Some(ws.id.clone()),
-                ..Default::default()
-            };
+        }
+        let mut outgoing = std::mem::take(&mut self.room_ui);
+        outgoing.selection = None;
+        outgoing.composer_cursor = None;
+        outgoing.refreshed = None;
+        if let Some(id) = outgoing.workspace.clone() {
+            if self.workspaces.iter().any(|ws| ws.id == id) {
+                self.room_presentations.insert(id, outgoing);
+            }
+        }
+        if let Some(id) = workspace {
+            self.room_ui = self
+                .room_presentations
+                .remove(&id)
+                .unwrap_or_else(|| RoomPresentation {
+                    workspace: Some(id),
+                    ..Default::default()
+                });
+        }
+        if self.room_active() {
+            self.prepare_room_surface();
+        }
+    }
+
+    pub(crate) fn select_room(&mut self) {
+        self.sync_room_workspace();
+        if self.room_ui.workspace.is_none() {
+            return;
         }
         self.room_ui.visible = true;
+        self.prepare_room_surface();
+    }
+
+    fn prepare_room_surface(&mut self) {
+        let Some(index) = self.active else { return };
         self.room_ui.selection = None;
         self.room_ui.composer_cursor = None;
         self.room_ui.members = crate::room::members(self, index);
@@ -221,16 +257,7 @@ impl App {
                 if key.modifiers == KeyModifiers::CONTROL
                     || key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
             {
-                if let Some(text) = self
-                    .state
-                    .room_ui
-                    .selection
-                    .as_ref()
-                    .and_then(|s| s.text(&self.state.room_ui.transcript_lines))
-                {
-                    self.state.request_clipboard_write = Some(text.into_bytes());
-                    self.dispatch_pending_clipboard_write();
-                }
+                self.copy_room_selection();
             }
             KeyCode::PageUp if key.modifiers.is_empty() => {
                 self.state.room_ui.scroll = self.state.room_ui.scroll.saturating_add(5)
@@ -270,6 +297,20 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    fn copy_room_selection(&mut self) {
+        if let Some(text) = self
+            .state
+            .room_ui
+            .selection
+            .as_ref()
+            .and_then(|s| s.text(&self.state.room_ui.transcript_lines))
+            .filter(|text| !text.is_empty())
+        {
+            self.state.request_clipboard_write = Some(text.into_bytes());
+            self.dispatch_pending_clipboard_write();
+        }
     }
 
     fn post_room_composer(&mut self) {
@@ -353,7 +394,16 @@ impl App {
                 &mut ui.selection,
             ) {
                 selection.end = end;
-                selection.dragging = mouse.kind != MouseEventKind::Up(MouseButton::Left);
+            }
+            if mouse.kind == MouseEventKind::Up(MouseButton::Left) {
+                if let Some(selection) = &mut ui.selection {
+                    selection.dragging = false;
+                }
+                // Match normal pane select-to-copy, using the same client-local
+                // clipboard event route. Host terminals may swallow Ctrl+Shift+C.
+                if self.state.copy_on_select {
+                    self.copy_room_selection();
+                }
             }
             return true;
         }
