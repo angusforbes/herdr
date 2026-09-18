@@ -59,23 +59,25 @@ test('startup posts one deterministic arrival within serialized registration wit
   assert.deepEqual(f.requests.map(r => r.method), ['room.get', 'room.delivery.register', 'room.agent.post']);
   const arrival = f.requests.at(-1);
   assert.equal(arrival.socket, '/explicit.sock');
-  assert.deepEqual(arrival.params, { workspace_id: 'w1', pane_id: 'w1:p1', terminal_id: 't1', session: f.member.session, text: 'Joined the room.', arrival: true });
+  assert.deepEqual(arrival.params, { workspace_id: 'w1', pane_id: 'w1:p1', terminal_id: 't1', session: f.member.session, text: "Hi, I'm Ada." });
   await f.receiver.tick(); await f.receiver.tick();
   assert.equal(f.requests.filter(r => r.method === 'room.agent.post').length, 1);
   assert.equal(f.sent.length, 0);
   assert.ok(f.receiver.run.receiver); assert.ok(!f.receiver.run.frozen);
 });
 
-test('fresh TS factory with cached native adapters attempts arrival, server dedups reload and terminal handoff', async () => {
-  const arrivals = new Map();
+test('every reload with cached native adapters posts a fresh named introduction', async () => {
   for (const terminal of ['t1', 't1', 'replacement']) {
-    const f = fixture({ arrivals, terminal }); await f.start(); f.stop();
-    assert.equal(f.sent.length, 0); assert.equal(arrivals.size, 1);
+    const f = fixture({ terminal }); await f.start(); f.stop();
+    const posts = f.requests.filter(r => r.method === 'room.agent.post');
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].params.text, "Hi, I'm Ada.");
+    assert.equal(posts[0].params.arrival, undefined, 'must not use once-per-session dedup');
+    assert.equal(f.sent.length, 0);
   }
-  for (const options of [{ session: 'Id:new-session' }, { workspace: 'other-room' }]) {
-    const f = fixture({ arrivals, ...options }); await f.start(); f.stop();
-  }
-  assert.equal(arrivals.size, 3);
+  const f = fixture();
+  await f.start(); f.member.name = 'Cadence'; await f.start();
+  assert.deepEqual(f.requests.filter(r => r.method === 'room.agent.post').map(r => r.params.text), ["Hi, I'm Ada.", "Hi, I'm Cadence."]);
 });
 
 test('old API, lost arrival ack and invalid ack do not poison registration or cause retries/turns', async () => {
@@ -112,11 +114,11 @@ test('room_post needs no delivery, captures identity, bounds bytes and does not 
 test('ambiguous post is sent once, not reported successful or retried by heartbeat', async () => {
   for (const failure of [new Error('lost ack'), { persistence: 'memory_only', sequence: 2 }, { persistence: 'saved', sequence: '2' }]) {
     const f = fixture({ callOverride: (method, params) => {
-      if (method === 'room.agent.post' && !params.arrival) { if (failure instanceof Error) throw failure; return failure; }
+      if (method === 'room.agent.post' && params.text === 'uncertain') { if (failure instanceof Error) throw failure; return failure; }
     } });
     await f.start(); await assert.rejects(f.post({ text: 'uncertain' }), /do not retry/);
     await f.receiver.tick(); await f.receiver.tick();
-    assert.equal(f.requests.filter(r => r.method === 'room.agent.post' && !r.params.arrival).length, 1);
+    assert.equal(f.requests.filter(r => r.method === 'room.agent.post' && r.params.text === 'uncertain').length, 1);
     assert.equal(f.sent.length, 0);
   }
 });
@@ -145,12 +147,12 @@ test('queued post from an invalidated session never reaches socket', async () =>
   f.receiver.serial = new Promise(resolve => { release = resolve; });
   const post = f.post({ text: 'queued' }); f.stop(); release();
   await assert.rejects(post, /do not retry/);
-  assert.equal(f.requests.filter(r => r.method === 'room.agent.post' && !r.params.arrival).length, 0);
+  assert.equal(f.requests.filter(r => r.method === 'room.agent.post' && r.params.text === 'queued').length, 0);
 });
 
 test('session change after post write is uncertain, never false success', async () => {
   let release;
-  const f = fixture({ callOverride: (method, params) => method === 'room.agent.post' && !params.arrival ? new Promise(resolve => { release = resolve; }) : undefined });
+  const f = fixture({ callOverride: (method, params) => method === 'room.agent.post' && params.text === 'racing' ? new Promise(resolve => { release = resolve; }) : undefined });
   await f.start();
   const post = f.post({ text: 'racing' });
   // Flush only microtasks to let the queued write start; no wall-clock polling.

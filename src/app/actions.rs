@@ -562,6 +562,23 @@ impl AppState {
                     launch_label(terminal.and_then(|terminal| terminal.launch_argv.as_ref()))
                 })
                 .unwrap_or_else(|| format!("pane {pane_number}"));
+            // Name metadata is also useful when the agent is stopped: do not
+            // require a live detected agent to identify a pane for revival.
+            let public_pane = crate::workspace::public_pane_id_for_number(&ws.id, pane_number);
+            let chosen_name = terminal.and_then(|terminal| {
+                let agent = terminal.effective_agent_label().unwrap_or("");
+                terminal
+                    .metadata_tokens
+                    .value("name")
+                    .and_then(|name| crate::room::chosen_name(name, agent, &public_pane))
+                    .or_else(|| {
+                        terminal
+                            .agent_name
+                            .as_deref()
+                            .and_then(|name| crate::room::chosen_name(name, agent, &public_pane))
+                    })
+            });
+            let previous_label = label;
             let display_agent = terminal.and_then(|terminal| terminal.effective_display_agent());
             let agent_label = display_agent.as_deref().or_else(|| {
                 terminal
@@ -580,6 +597,17 @@ impl AppState {
                 (Some(agent_label), Some(status)) => format!("{agent_label} · {status}"),
                 (Some(agent_label), None) => agent_label.to_string(),
                 (None, _) => "shell".to_string(),
+            };
+            let meta = if chosen_name
+                .is_some_and(|name| name != previous_label && previous_label != public_pane)
+            {
+                format!("{previous_label} · {meta}")
+            } else {
+                meta
+            };
+            let label = match chosen_name {
+                Some(name) => format!("{name} · {public_pane}"),
+                None => previous_label,
             };
             let is_current = self.is_active_pane(ws_idx, tab_idx, pane_id);
             let search_text = format!("{label} {meta}").to_lowercase();
@@ -3830,6 +3858,58 @@ mod tests {
             row.target,
             crate::app::state::NavigatorTarget::Pane { pane_id, .. } if pane_id == agent
         ) && row.meta.contains("claude")));
+    }
+
+    #[test]
+    fn navigator_shows_and_searches_chosen_names_for_stopped_panes() {
+        let mut state = app_with_workspaces(&["one"]);
+        let pane_id = state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = state.workspaces[0].terminal_id(pane_id).cloned().unwrap();
+        let public_pane = crate::workspace::public_pane_id_for_number(
+            &state.workspaces[0].id,
+            state.workspaces[0].public_pane_number(pane_id).unwrap(),
+        );
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.manual_label = Some("Dance Game".into());
+        terminal.metadata_tokens.patch(
+            [("name".into(), Some("♪ Cadence".into()))].into(),
+            None,
+            std::time::Instant::now(),
+        );
+        assert!(terminal.effective_agent_label().is_none());
+        state.open_navigator();
+        let rows = state.navigator_rows();
+        let row = rows
+            .iter()
+            .find(|row| {
+                matches!(row.target,
+            NavigatorTarget::Pane { pane_id: id, .. } if id == pane_id)
+            })
+            .unwrap();
+        assert_eq!(row.label, format!("Cadence · {public_pane}"));
+        assert!(row.meta.contains("Dance Game"));
+        assert!(row.search_text.contains("cadence"));
+        assert!(row.search_text.contains(&public_pane.to_lowercase()));
+        state.navigator.query = "Cadence".into();
+        assert!(state.navigator_rows().iter().any(|row| matches!(row.target,
+            NavigatorTarget::Pane { pane_id: id, .. } if id == pane_id)
+            && row.matched));
+        // Clearing the name restores the prior title instead of a stale alias.
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .metadata_tokens
+            .patch(
+                [("name".into(), None)].into(),
+                None,
+                std::time::Instant::now(),
+            );
+        state.navigator.query.clear();
+        assert!(state
+            .navigator_rows()
+            .iter()
+            .any(|row| row.label == "Dance Game"));
     }
 
     #[test]

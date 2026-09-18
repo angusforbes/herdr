@@ -20,18 +20,30 @@ export default function (pi: ExtensionAPI) {
   // already be cached in a Pi upgraded through /reload. This runs inside the
   // receiver's serialized RPC slot; recursively calling receiver.rpc deadlocks.
   const attemptedArrivals = new WeakSet();
+  const introductionNames = new WeakMap();
   const receiver = new RoomReceiver({ ...pi, sendMessage: context.sendMessage }, env, {
     call: async (socket, method, params, options) => {
       const g = receiver.run;
       const result = await context.call(socket, method, params, options);
+      if (method === "room.get" && g && receiver.valid(g)) {
+        const member = result.members?.find(m => m.pane_id === env.HERDR_PANE_ID && m.session === g.session);
+        if (member) introductionNames.set(g, { workspace: params.workspace_id, member });
+      }
       if (method === "room.delivery.register" && !options?.signal?.aborted && result.receiver_id && result.server_epoch
           && g && receiver.valid(g) && params.session === g.session && !attemptedArrivals.has(g)) {
         attemptedArrivals.add(g);
         try {
+          const known = introductionNames.get(g);
+          const member = known?.workspace === params.workspace_id && known.member.terminal_id === params.terminal_id ? known.member : undefined;
+          const name = member?.name?.trim();
+          const text = name && name !== member.pane_id && name.toLowerCase() !== member.agent?.toLowerCase()
+            ? `Hi, I'm ${name}.` : "Hi, I'm here. I'll introduce myself once I've chosen a name.";
           const ack = await context.call(socket, "room.agent.post", {
             workspace_id: params.workspace_id, pane_id: params.pane_id,
             terminal_id: params.terminal_id, session: params.session,
-            text: "Joined the room.", arrival: true,
+            // Every lifecycle/reload intentionally posts a fresh introduction.
+            // The durable once-per-session arrival mode is not used here.
+            text,
           }, options);
           if (ack.persistence !== "saved" || !Number.isSafeInteger(ack.sequence) || ack.sequence < 1) throw new Error("Arrival not confirmed saved");
         } catch {

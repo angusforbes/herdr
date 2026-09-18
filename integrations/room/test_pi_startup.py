@@ -125,10 +125,10 @@ class PiStartupTests(unittest.TestCase):
                             elif req["method"] == "room.agent.post":
                                 if (params["workspace_id"] != env["HERDR_WORKSPACE_ID"] or
                                     any(params[key] != member[key] for key in ("pane_id", "terminal_id", "session")) or
-                                    params.get("arrival") is not True or params["text"] != "Joined the room."):
+                                    params.get("arrival", False) or params["text"] != "Hi, I'm startup."):
                                     raise AssertionError("arrival did not use captured binding/deterministic text")
-                                key = (params["workspace_id"], params["session"])
-                                arrivals.setdefault(key, len(arrivals) + 1)
+                                key = len(arrivals)
+                                arrivals[key] = key + 1
                                 result = {"persistence": "saved", "sequence": arrivals[key]}
                             elif req["method"] == "room.delivery.claim":
                                 result = {"delivery": None}
@@ -220,14 +220,14 @@ class PiStartupTests(unittest.TestCase):
                     self.assertTrue(ready.is_set())
                     self.assertIsNone(process.poll())
                     self.assertEqual(requests.count("room.agent.post"), 2)
-                    self.assertEqual(len(arrivals), 1, "reload/re-enable must deduplicate the arrival")
+                    self.assertEqual(len(arrivals), 2, "reload/re-enable must introduce again")
                 else:
                     ready.clear()
                     command('/reload')
                     drain_for(4)
                     self.assertTrue(ready.is_set())
                     self.assertEqual(requests.count("room.agent.post"), 2)
-                    self.assertEqual(len(arrivals), 1, "same session reload must not add an arrival")
+                    self.assertEqual(len(arrivals), 2, "same session reload must introduce again")
                 self.assertEqual(failures, [])
             finally:
                 if process.poll() is None:

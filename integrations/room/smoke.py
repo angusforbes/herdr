@@ -107,9 +107,9 @@ def run(args):
                 call(socket, "room.get", {"workspace_id": workspace})
                 time.sleep(1)
             transcript = call(socket, "room.read", {"workspace_id": workspace})["messages"]
-            arrivals = [m for m in transcript if m.get("arrival")]
-            conversation = [m for m in transcript if not m.get("arrival")]
-            if (len(arrivals) != 2 or any(m["text"] != "Joined the room." for m in arrivals) or
+            arrivals = [m for m in transcript if m.get("author") and m.get("reply_to") is None]
+            conversation = [m for m in transcript if not (m.get("author") and m.get("reply_to") is None)]
+            if (len(arrivals) != 2 or any(not m["text"].startswith("Hi, I'm ") for m in arrivals) or
                 {json.dumps(identity(m["author"]), sort_keys=True) for m in arrivals} !=
                 {json.dumps(identity(m), sort_keys=True) for m in members}):
                 raise RuntimeError("Expected one deterministic attributed arrival per session")
