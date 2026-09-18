@@ -27,6 +27,18 @@ pub struct RoomRecipient {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RoomAgentPostParams {
+    pub workspace_id: String,
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub session: String,
+    pub text: String,
+    /// Ignore text and record one deterministic arrival per agent/session/room.
+    #[serde(default)]
+    pub arrival: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RoomReplyParams {
     pub workspace_id: String,
     pub request_sequence: u64,

@@ -16,7 +16,35 @@ export default function (pi: ExtensionAPI) {
     && typeof env.HERDR_PANE_ID === "string" && env.HERDR_PANE_ID.length > 0
     ? "1" : "0";
   const context = contextualRoomTransport(pi);
-  const receiver = new RoomReceiver({ ...pi, sendMessage: context.sendMessage }, env, { call: context.call });
+  // Keep arrival policy in this fresh TS closure: both native adapters may
+  // already be cached in a Pi upgraded through /reload. This runs inside the
+  // receiver's serialized RPC slot; recursively calling receiver.rpc deadlocks.
+  const attemptedArrivals = new WeakSet();
+  const receiver = new RoomReceiver({ ...pi, sendMessage: context.sendMessage }, env, {
+    call: async (socket, method, params, options) => {
+      const g = receiver.run;
+      const result = await context.call(socket, method, params, options);
+      if (method === "room.delivery.register" && !options?.signal?.aborted && result.receiver_id && result.server_epoch
+          && g && receiver.valid(g) && params.session === g.session && !attemptedArrivals.has(g)) {
+        attemptedArrivals.add(g);
+        try {
+          const ack = await context.call(socket, "room.agent.post", {
+            workspace_id: params.workspace_id, pane_id: params.pane_id,
+            terminal_id: params.terminal_id, session: params.session,
+            text: "Joined the room.", arrival: true,
+          }, options);
+          if (ack.persistence !== "saved" || !Number.isSafeInteger(ack.sequence) || ack.sequence < 1) throw new Error("Arrival not confirmed saved");
+        } catch {
+          // Old/offline servers and uncertain notices must not freeze a valid
+          // receiver registration. No model message, inference, or silent retry.
+          try {
+            if (receiver.valid(g) && g.ctx.hasUI) g.ctx.ui.notify("Room arrival not confirmed; receiver remains available. No automatic retry.", "warning");
+          } catch { /* a closing UI cannot poison registration */ }
+        }
+      }
+      return result;
+    },
+  });
   registerRoomLifecycle(pi, receiver);
   pi.registerMessageRenderer("room-question", (message, { outputPad }, theme) => {
     const box = new Box(outputPad, 1, text => theme.bg("userMessageBg", text));
@@ -37,6 +65,28 @@ export default function (pi: ExtensionAPI) {
       const messages = boundedMessages(result.messages);
       const next = messages.at(-1)?.sequence ?? after;
       return { content: [{ type: "text", text: JSON.stringify({ room: g.workspace, messages, next_after_sequence: next, more: next < result.next_sequence - 1 }) }], details: { workspace_id: g.workspace, next_after_sequence: next } };
+    },
+  });
+  pi.registerTool({
+    name: "room_post",
+    label: "Post to room",
+    description: "Share a spontaneous attributed contribution in the current room, without a delivered question. Maximum 8192 UTF-8 bytes. Does not prompt other agents or end your current task. Never retry an uncertain submission; inspect room_read instead. Socket and author identity are fixed by the receiver.",
+    promptSnippet: "Share a bounded contribution in the current shared room",
+    parameters: Type.Object({ text: Type.String({ minLength: 1, maxLength: 8192 }) }, { additionalProperties: false }),
+    execute: async (_id, params, signal, _update, ctx) => {
+      const g = receiver.run;
+      if (!g || !receiver.valid(g, ctx) || !g.workspace || !g.member) throw new Error("No current room binding");
+      if (signal?.aborted) throw new Error("Room post cancelled before submission");
+      if (!params.text.trim() || Buffer.byteLength(params.text) > 8192) throw new Error("Post must contain 1..8192 UTF-8 bytes");
+      try {
+        const result = await receiver.rpc(g, "room.agent.post", {
+          workspace_id: g.workspace, ...g.member, text: params.text,
+        }, signal);
+        if (!receiver.valid(g, ctx) || result.persistence !== "saved" || !Number.isSafeInteger(result.sequence) || result.sequence < 1) throw new Error("Uncertain room post acknowledgement");
+        return { content: [{ type: "text", text: "Post saved in the shared room. No agents were prompted." }], details: { sequence: result.sequence, workspace_id: g.workspace } };
+      } catch {
+        throw new Error("Room post not confirmed; do not retry. Inspect room_read.");
+      }
     },
   });
   pi.registerTool({

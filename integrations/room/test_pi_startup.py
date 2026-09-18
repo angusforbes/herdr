@@ -76,8 +76,10 @@ class PiStartupTests(unittest.TestCase):
                 receiver.write_text(instrument(current_receiver.replace(default_policy, old_policy), "old"))
                 current_receiver = instrument(current_receiver, "new")
                 entry.write_text('import { RoomReceiver, registerRoomLifecycle } from "./receiver.mjs";\n'
+                                 'import { contextualRoomTransport } from "./room-context.mjs";\n'
                                  'export default function(pi) {\n'
-                                 '  const receiver = new RoomReceiver(pi, process.env);\n'
+                                 '  const context = contextualRoomTransport(pi);\n'
+                                 '  const receiver = new RoomReceiver({...pi, sendMessage:context.sendMessage}, process.env, {call:context.call});\n'
                                  '  registerRoomLifecycle(pi, receiver);\n'
                                  '}\n')
                 if startup_optin:
@@ -89,6 +91,7 @@ class PiStartupTests(unittest.TestCase):
             stop = threading.Event()
             ready = threading.Event()
             requests = []
+            arrivals = {}
             failures = []
             member = {"pane_id": "w1.p1", "terminal_id": "t1", "agent": "pi", "name": "startup", "session": None}
 
@@ -119,6 +122,14 @@ class PiStartupTests(unittest.TestCase):
                                     any(params[key] != member[key] for key in ("pane_id", "terminal_id", "session"))):
                                     raise AssertionError("receiver did not use exact live hook identity")
                                 result = {"receiver_id": "r1", "server_epoch": "e1"}
+                            elif req["method"] == "room.agent.post":
+                                if (params["workspace_id"] != env["HERDR_WORKSPACE_ID"] or
+                                    any(params[key] != member[key] for key in ("pane_id", "terminal_id", "session")) or
+                                    params.get("arrival") is not True or params["text"] != "Joined the room."):
+                                    raise AssertionError("arrival did not use captured binding/deterministic text")
+                                key = (params["workspace_id"], params["session"])
+                                arrivals.setdefault(key, len(arrivals) + 1)
+                                result = {"persistence": "saved", "sequence": arrivals[key]}
                             elif req["method"] == "room.delivery.claim":
                                 result = {"delivery": None}
                                 if params["ready"]:
@@ -186,6 +197,8 @@ class PiStartupTests(unittest.TestCase):
                     self.fail(f"Pi hooks not ready; exit={process.poll()}, APIs={requests}, loader hints={hints}, errors={failures}")
                 self.assertIn("pane.report_agent_session", requests)
                 self.assertIn("room.delivery.register", requests)
+                self.assertEqual(requests.count("room.agent.post"), 1)
+                self.assertEqual(len(arrivals), 1)
                 self.assertNotIn("room.reply", requests)
                 self.assertNotIn("room.post", requests)
                 self.assertNotIn("room.read", requests)
@@ -206,6 +219,16 @@ class PiStartupTests(unittest.TestCase):
                     drain_for(3)
                     self.assertTrue(ready.is_set())
                     self.assertIsNone(process.poll())
+                    self.assertEqual(requests.count("room.agent.post"), 2)
+                    self.assertEqual(len(arrivals), 1, "reload/re-enable must deduplicate the arrival")
+                else:
+                    ready.clear()
+                    command('/reload')
+                    drain_for(4)
+                    self.assertTrue(ready.is_set())
+                    self.assertEqual(requests.count("room.agent.post"), 2)
+                    self.assertEqual(len(arrivals), 1, "same session reload must not add an arrival")
+                self.assertEqual(failures, [])
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGTERM)

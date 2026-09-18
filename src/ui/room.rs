@@ -55,12 +55,20 @@ pub(super) fn compute_room_view(app: &mut AppState, area: Rect, terminal_height:
             ui.transcript_roles
                 .resize(ui.transcript_lines.len(), TranscriptRole::AgentHeader);
         }
-        wrap_into(&message.text, width as usize, &mut ui.transcript_lines);
         let role = if message.author.is_none() {
+            ui.transcript_lines.push(String::new()); // top grey padding
             TranscriptRole::Human
         } else {
             TranscriptRole::Agent
         };
+        wrap_into(
+            &message.text,
+            width as usize - 2 * role.inset(width),
+            &mut ui.transcript_lines,
+        );
+        if role == TranscriptRole::Human {
+            ui.transcript_lines.push(String::new()); // bottom grey padding
+        }
         ui.transcript_roles.resize(ui.transcript_lines.len(), role);
         ui.transcript_lines.push(String::new());
         ui.transcript_roles.push(TranscriptRole::Spacer);
@@ -142,7 +150,47 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
         TranscriptRole::AgentHeader => Style::default().fg(app.palette.text).bg(agent_bg),
         TranscriptRole::Agent | TranscriptRole::Spacer => Style::default(),
     };
-    // Only human messages fill the row. Agent names are tinted spans, not cards.
+    let visible: Vec<_> = ui
+        .transcript_lines
+        .iter()
+        .enumerate()
+        .skip(ui.transcript_begin)
+        .take(transcript.height as usize)
+        .map(|(row, line)| {
+            let range = ui
+                .selection
+                .as_ref()
+                .map(|s| s.range(row, line.len()))
+                .unwrap_or(0..0);
+            let role = ui
+                .transcript_roles
+                .get(row)
+                .copied()
+                .unwrap_or(TranscriptRole::Spacer);
+            let style = message_style(role);
+            let line = Line::from(vec![
+                Span::styled(
+                    if role.inset(transcript.width) == 1 {
+                        " "
+                    } else {
+                        ""
+                    },
+                    style,
+                ),
+                Span::styled(&line[..range.start], style),
+                Span::styled(&line[range.clone()], style.add_modifier(Modifier::REVERSED)),
+                Span::styled(&line[range.end..], style),
+            ]);
+            if role == TranscriptRole::Human {
+                line.style(style)
+            } else {
+                line
+            }
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(visible), transcript);
+    // Paint after text layout: clipped wide glyphs may reset cells. Patching
+    // foreground/background preserves selection modifiers and blank padding.
     for (offset, role) in ui
         .transcript_roles
         .iter()
@@ -162,32 +210,6 @@ pub(super) fn render_room(app: &AppState, frame: &mut Frame, area: Rect) {
             );
         }
     }
-    let visible: Vec<_> = ui
-        .transcript_lines
-        .iter()
-        .enumerate()
-        .skip(ui.transcript_begin)
-        .take(transcript.height as usize)
-        .map(|(row, line)| {
-            let range = ui
-                .selection
-                .as_ref()
-                .map(|s| s.range(row, line.len()))
-                .unwrap_or(0..0);
-            let style = message_style(
-                ui.transcript_roles
-                    .get(row)
-                    .copied()
-                    .unwrap_or(TranscriptRole::Spacer),
-            );
-            Line::from(vec![
-                Span::styled(&line[..range.start], style),
-                Span::styled(&line[range.clone()], style.add_modifier(Modifier::REVERSED)),
-                Span::styled(&line[range.end..], style),
-            ])
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(visible), transcript);
     frame.render_widget(
         Paragraph::new(
             [&ui.status, &ui.delivery_summary]
@@ -381,11 +403,13 @@ mod tests {
         compute_room_view(&mut app, area, area.height);
         assert_eq!(
             app.room_ui.transcript_lines,
-            ["question", "界", "", "Aporia", "answer", ""]
+            ["", "question", "界", "", "", "Aporia", "answer", ""]
         );
         assert_eq!(
             app.room_ui.transcript_roles,
             [
+                TranscriptRole::Human,
+                TranscriptRole::Human,
                 TranscriptRole::Human,
                 TranscriptRole::Human,
                 TranscriptRole::Spacer,
@@ -396,8 +420,8 @@ mod tests {
         );
         use crate::app::room::selection::{Point, Selection};
         app.room_ui.selection = Some(Selection {
-            anchor: Point { row: 0, byte: 0 },
-            end: Point { row: 4, byte: 6 },
+            anchor: Point { row: 1, byte: 0 },
+            end: Point { row: 6, byte: 6 },
             dragging: false,
         });
         assert_eq!(
@@ -406,40 +430,117 @@ mod tests {
                 .unwrap()
                 .text(&app.room_ui.transcript_lines)
                 .unwrap(),
-            "question\n界\n\nAporia\nanswer"
+            "question\n界\n\n\nAporia\nanswer"
         );
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
             .draw(|frame| render_room(&app, frame, area))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        for row in [0, 1] {
-            assert_eq!(
-                buffer[(79, row)].bg,
-                app.palette.surface0,
-                "human row padding highlighted"
-            );
-            assert_eq!(buffer[(0, row)].bg, app.palette.surface0);
-            assert!(
-                buffer[(0, row)].modifier.contains(Modifier::REVERSED),
-                "selection distinct from background"
-            );
+        for row in 0..4 {
+            for col in 0..80 {
+                // Ratatui resets the continuation cell of a wide glyph; the
+                // leading cell supplies its rendered style for both columns.
+                if row == 2 && col == 2 {
+                    continue;
+                }
+                assert_eq!(
+                    buffer[(col, row)].bg,
+                    app.palette.surface0,
+                    "cell ({col}, {row})"
+                );
+                if row == 0 || row == 3 || col == 0 || col == 79 {
+                    assert_eq!(buffer[(col, row)].symbol(), " ");
+                    assert!(!buffer[(col, row)].modifier.contains(Modifier::REVERSED));
+                }
+            }
+        }
+        assert_eq!(buffer[(1, 1)].symbol(), "q");
+        assert_eq!(buffer[(1, 2)].symbol(), "界");
+        for row in [1, 2] {
+            assert!(buffer[(1, row)].modifier.contains(Modifier::REVERSED));
         }
         let tint = workspace_message_tint(app.palette.surface0, app.workspace_color(0));
         assert_ne!(tint, app.palette.surface0);
         for col in 0..6 {
-            assert_eq!(buffer[(col, 3)].bg, tint, "only the name is tinted");
+            assert_eq!(buffer[(col, 5)].bg, tint, "only the name is tinted");
         }
-        assert_eq!(buffer[(6, 3)].bg, Color::Reset, "header padding is plain");
-        assert_eq!(buffer[(79, 3)].bg, Color::Reset);
+        assert_eq!(buffer[(6, 5)].bg, Color::Reset, "header padding is plain");
+        assert_eq!(buffer[(79, 5)].bg, Color::Reset);
         for col in [0, 5, 79] {
-            assert_eq!(buffer[(col, 4)].bg, Color::Reset, "reply body is plain");
+            assert_eq!(buffer[(col, 6)].bg, Color::Reset, "reply body is plain");
         }
-        assert_ne!(buffer[(79, 2)].bg, tint, "message gap stays clear");
+        assert_ne!(buffer[(79, 4)].bg, tint, "message gap stays clear");
         assert_eq!(
             app.workspaces[0].room, stored,
             "presentation must not mutate history"
         );
+    }
+
+    #[test]
+    fn room_human_padding_wraps_unicode_and_narrow_viewports_without_indenting_agents() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut app = AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("room")];
+        app.active = Some(0);
+        let author = crate::room::Member {
+            name: "ABCD".into(),
+            pane_id: "w1:p1".into(),
+            terminal_id: "t1".into(),
+            agent: "pi".into(),
+            session: Some("Id:test".into()),
+        };
+        app.workspaces[0]
+            .room
+            .post("a界e\u{301}".into(), Some(author.clone()), 0)
+            .unwrap();
+        app.workspaces[0]
+            .room
+            .reply(1, author, "abcd".into(), 1)
+            .unwrap();
+        app.select_room();
+        for (width, expected) in [
+            (
+                1,
+                vec![
+                    "", "a", "界", "e\u{301}", "", "", "A", "B", "C", "D", "a", "b", "c", "d", "",
+                ],
+            ),
+            (
+                2,
+                vec![
+                    "", "a", "界", "e\u{301}", "", "", "AB", "CD", "ab", "cd", "",
+                ],
+            ),
+            (6, vec!["", "a界e\u{301}", "", "", "ABCD", "abcd", ""]),
+        ] {
+            let area = Rect::new(0, 0, width, 30);
+            compute_room_view(&mut app, area, 30);
+            assert_eq!(app.room_ui.transcript_lines, expected);
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            terminal
+                .draw(|frame| render_room(&app, frame, area))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            for (row, role) in app.room_ui.transcript_roles.iter().enumerate() {
+                if *role == TranscriptRole::Human {
+                    for col in 0..width {
+                        // TestBackend resets trailing cells of wide glyphs on flush.
+                        if (width == 2 && row == 2 && col == 1)
+                            || (width == 6 && row == 1 && col == 3)
+                        {
+                            continue;
+                        }
+                        assert_eq!(
+                            buffer[(col, row as u16)].bg,
+                            app.palette.surface0,
+                            "width={width} cell=({col},{row})"
+                        );
+                    }
+                }
+            }
+            assert_eq!(buffer[(u16::from(width >= 3), 1)].symbol(), "a");
+        }
     }
 
     #[test]
@@ -501,13 +602,13 @@ mod tests {
         app.select_room();
         compute_room_view(&mut app, Rect::new(0, 0, 80, 30), 30);
         let count = app.room_ui.transcript_lines.len();
-        let pointer = app.room_ui.transcript_lines[0].as_ptr();
+        let pointer = app.room_ui.transcript_lines[1].as_ptr();
         compute_room_view(&mut app, Rect::new(0, 0, 80, 30), 30);
-        assert_eq!(app.room_ui.transcript_lines[0].as_ptr(), pointer);
+        assert_eq!(app.room_ui.transcript_lines[1].as_ptr(), pointer);
         assert_eq!(app.room_ui.transcript_lines.len(), count);
         app.workspaces[0].room.post("last".into(), None, 0).unwrap();
         compute_room_view(&mut app, Rect::new(0, 0, 80, 30), 30);
-        assert_eq!(app.room_ui.transcript_lines[0].as_ptr(), pointer);
+        assert_eq!(app.room_ui.transcript_lines[1].as_ptr(), pointer);
         assert!(app
             .room_ui
             .transcript_lines

@@ -1019,6 +1019,9 @@ impl App {
             Method::RoomRead(params) => return self.handle_room_read(request.id, params),
             Method::RoomPost(params) => return self.handle_room_post(request.id, params),
             Method::RoomReply(params) => return self.handle_room_reply(request.id, params),
+            Method::RoomAgentPost(params) => {
+                return self.handle_room_agent_post(request.id, params)
+            }
             Method::RoomDeliveryRegister(params) => {
                 return self.handle_room_delivery_register(request.id, params)
             }

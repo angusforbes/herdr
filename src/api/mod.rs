@@ -24,6 +24,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
         &request.method,
         Method::RoomPost(_)
             | Method::RoomReply(_)
+            | Method::RoomAgentPost(_)
             | Method::ServerReloadConfig(_)
             | Method::ServerReloadAgentManifests(_)
             | Method::NotificationShow(_)

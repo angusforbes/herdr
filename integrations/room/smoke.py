@@ -107,7 +107,13 @@ def run(args):
                 call(socket, "room.get", {"workspace_id": workspace})
                 time.sleep(1)
             transcript = call(socket, "room.read", {"workspace_id": workspace})["messages"]
-            if len(transcript) != 5 or sum(m.get("author") is not None for m in transcript) != 3:
+            arrivals = [m for m in transcript if m.get("arrival")]
+            conversation = [m for m in transcript if not m.get("arrival")]
+            if (len(arrivals) != 2 or any(m["text"] != "Joined the room." for m in arrivals) or
+                {json.dumps(identity(m["author"]), sort_keys=True) for m in arrivals} !=
+                {json.dumps(identity(m), sort_keys=True) for m in members}):
+                raise RuntimeError("Expected one deterministic attributed arrival per session")
+            if len(conversation) != 5 or sum(m.get("author") is not None for m in conversation) != 3:
                 raise RuntimeError("Unexpected replay/reply fanout in transcript")
             info = call(socket, "room.get", {"workspace_id": workspace})
             if len(info["deliveries"]) != 3 or any(d["status"] != "replied" for d in info["deliveries"]):

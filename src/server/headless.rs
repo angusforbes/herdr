@@ -10604,17 +10604,17 @@ next_tab = ""
         for (kind, x, y) in [
             (
                 MouseEventKind::Down(MouseButton::Left),
-                area.x + 2,
+                area.x + 3,
                 area.y + row,
             ),
             (
                 MouseEventKind::Drag(MouseButton::Left),
-                area.x + 7,
+                area.x + 8,
                 area.y + row + 1,
             ),
             (
                 MouseEventKind::Up(MouseButton::Left),
-                area.x + 7,
+                area.x + 8,
                 area.y + row + 1,
             ),
         ] {

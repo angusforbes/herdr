@@ -20,6 +20,13 @@ pub enum TranscriptRole {
     Spacer,
 }
 
+impl TranscriptRole {
+    /// Presentation-only inset; narrow viewports reserve all cells for text.
+    pub fn inset(self, width: u16) -> usize {
+        usize::from(self == Self::Human && width >= 3)
+    }
+}
+
 #[derive(Default)]
 pub struct RoomPresentation {
     pub workspace: Option<String>,
@@ -395,6 +402,7 @@ impl App {
             if let (Some(end), Some(selection)) = (
                 selection::hit(
                     &ui.transcript_lines,
+                    &ui.transcript_roles,
                     ui.transcript_begin,
                     ui.transcript_area,
                     position,
@@ -441,6 +449,7 @@ impl App {
                     if ui.transcript_area.contains(position) {
                         ui.selection = selection::hit(
                             &ui.transcript_lines,
+                            &ui.transcript_roles,
                             ui.transcript_begin,
                             ui.transcript_area,
                             position,

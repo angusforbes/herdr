@@ -457,6 +457,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::RoomRead(_) => "room.read",
         Method::RoomPost(_) => "room.post",
         Method::RoomReply(_) => "room.reply",
+        Method::RoomAgentPost(_) => "room.agent.post",
         Method::RoomDeliveryRegister(_) => "room.delivery.register",
         Method::RoomDeliveryClaim(_) => "room.delivery.claim",
         Method::RoomDeliveryReport(_) => "room.delivery.report",

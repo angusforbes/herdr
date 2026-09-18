@@ -154,6 +154,60 @@ impl App {
         }
     }
 
+    pub(super) fn handle_room_agent_post(
+        &mut self,
+        id: String,
+        params: RoomAgentPostParams,
+    ) -> String {
+        self.room_agent_post_with(id, params, crate::persist::save_checked)
+    }
+
+    pub(crate) fn room_agent_post_with(
+        &mut self,
+        id: String,
+        params: RoomAgentPostParams,
+        save: impl FnOnce(&crate::persist::SessionSnapshot) -> std::io::Result<()>,
+    ) -> String {
+        let Some(index) = self.room_workspace_index(&params.workspace_id) else {
+            return encode_error(id, "workspace_not_found", "unknown workspace".into());
+        };
+        // Resolve authority before even an idempotent arrival lookup. Names and
+        // agent labels always come from live membership, never caller claims.
+        let member = crate::room::members(&self.state, index)
+            .into_iter()
+            .find(|m| {
+                m.pane_id == params.pane_id
+                    && m.terminal_id == params.terminal_id
+                    && m.session.as_deref() == Some(params.session.as_str())
+            });
+        let Some(member) = member else {
+            return encode_error(
+                id,
+                "invalid_recipient",
+                "session is not currently a member of this room".into(),
+            );
+        };
+        if params.arrival {
+            if let Some(sequence) = self.state.workspaces[index].room.arrival_sequence(&member) {
+                let persistence = if self.no_session {
+                    "memory_only"
+                } else {
+                    "saved"
+                };
+                return self.room_written(id, index, sequence, persistence);
+            }
+        }
+        let mut candidate = self.state.workspaces[index].room.clone();
+        match candidate.post_agent(member, params.text, params.arrival, now()) {
+            Ok(sequence) => match self.save_room_candidate_with(index, candidate, save) {
+                Ok(persistence) => self.room_written(id, index, sequence, persistence),
+                Err(error) => encode_error(id, "room_save_failed", error),
+            },
+            Err(error) => encode_error(id, "invalid_room_post", error),
+        }
+        // Deliberately no enqueue or delivery-status mutation for agent posts.
+    }
+
     pub(super) fn handle_room_reply(&mut self, id: String, params: RoomReplyParams) -> String {
         self.cleanup_room_delivery(now());
         let Some(index) = self.room_workspace_index(&params.workspace_id) else {

@@ -29,6 +29,9 @@ pub struct Message {
     pub recipients: Vec<Member>,
     pub reply_to: Option<u64>,
     pub expires_unix: Option<u64>,
+    /// Deterministic session arrival, durably deduplicated across terminal replacement.
+    #[serde(default)]
+    pub arrival: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -88,6 +91,7 @@ impl Room {
             recipients: Vec::new(),
             reply_to: None,
             expires_unix,
+            arrival: false,
         })
     }
 
@@ -119,6 +123,50 @@ impl Room {
             recipients: audience,
             reply_to: None,
             expires_unix,
+            arrival: false,
+        })
+    }
+
+    pub fn arrival_sequence(&self, member: &Member) -> Option<u64> {
+        self.messages.iter().find_map(|message| {
+            (message.arrival
+                && message.author.as_ref().is_some_and(|author| {
+                    author.agent == member.agent && author.session == member.session
+                }))
+            .then_some(message.sequence)
+        })
+    }
+
+    /// Agent contributions are never addressed requests and cannot fan out.
+    pub fn post_agent(
+        &mut self,
+        member: Member,
+        text: String,
+        arrival: bool,
+        now: u64,
+    ) -> Result<u64, String> {
+        if member.session.as_deref().is_none_or(str::is_empty) {
+            return Err("author has no live session identity".into());
+        }
+        if arrival {
+            if let Some(sequence) = self.arrival_sequence(&member) {
+                return Ok(sequence);
+            }
+        }
+        self.append(Message {
+            sequence: 0,
+            text: if arrival {
+                "Joined the room.".into()
+            } else {
+                text
+            },
+            created_unix: now,
+            author: Some(member),
+            recipient: None,
+            recipients: Vec::new(),
+            reply_to: None,
+            expires_unix: None,
+            arrival,
         })
     }
 
@@ -174,6 +222,7 @@ impl Room {
             recipients: Vec::new(),
             reply_to: Some(request),
             expires_unix: None,
+            arrival: false,
         })
     }
 }
@@ -265,6 +314,80 @@ mod tests {
             session: Some("session-a".into()),
         }
     }
+    #[test]
+    fn room_agent_posts_are_bounded_unaddressed_and_not_human() {
+        let mut room = Room::default();
+        for text in [" ".into(), "界".repeat(MAX_MESSAGE_BYTES / 3 + 1)] {
+            assert!(room.post_agent(member(), text, false, 0).is_err());
+        }
+        let mut missing = member();
+        missing.session = None;
+        assert!(room.post_agent(missing, "hello".into(), false, 0).is_err());
+        room.post_agent(member(), "hello".into(), false, 0).unwrap();
+        let message = &room.messages[0];
+        assert_eq!(message.author, Some(member()));
+        assert!(!message.arrival);
+        assert!(message.recipient.is_none() && message.recipients.is_empty());
+        assert!(message.reply_to.is_none() && message.expires_unix.is_none());
+        assert!(room.reply(1, member(), "no loop".into(), 1).is_err());
+    }
+
+    #[test]
+    fn room_arrival_survives_snapshot_terminal_replacement_and_full_room() {
+        let mut room = Room::default();
+        assert_eq!(
+            room.post_agent(member(), "ignored".into(), true, 0)
+                .unwrap(),
+            1
+        );
+        assert_eq!(room.messages[0].text, "Joined the room.");
+        assert!(room.messages[0].arrival);
+        let mut room: Room = serde_json::from_value(serde_json::to_value(room).unwrap()).unwrap();
+        let mut moved = member();
+        moved.terminal_id = "new terminal".into();
+        moved.pane_id = "new pane".into();
+        moved.name = "Renamed".into();
+        while room.messages.len() < MAX_MESSAGES {
+            room.post("filler".into(), None, 0).unwrap();
+        }
+        let before = room.clone();
+        assert_eq!(
+            room.post_agent(moved.clone(), "ignored".into(), true, 1)
+                .unwrap(),
+            1
+        );
+        assert_eq!(room, before);
+        assert!(room
+            .post_agent(moved.clone(), "full".into(), false, 1)
+            .is_err());
+        moved.session = Some("new session".into());
+        assert!(room.post_agent(moved, "ignored".into(), true, 1).is_err());
+        let mut other_room = Room::default();
+        assert!(other_room.post_agent(member(), "".into(), true, 0).is_ok());
+    }
+
+    #[test]
+    fn room_legacy_messages_do_not_suppress_arrival_even_with_identical_text() {
+        let mut room = Room::default();
+        room.post_agent(member(), "Joined the room.".into(), false, 0)
+            .unwrap();
+        let mut json = serde_json::to_value(room).unwrap();
+        json["messages"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("arrival");
+        let mut room: Room = serde_json::from_value(json).unwrap();
+        assert!(!room.messages[0].arrival);
+        assert_eq!(room.post_agent(member(), "".into(), true, 1).unwrap(), 2);
+        let mut different_agent = member();
+        different_agent.agent = "claude".into();
+        assert_eq!(
+            room.post_agent(different_agent, "".into(), true, 1)
+                .unwrap(),
+            3
+        );
+    }
+
     #[test]
     fn room_author_heading_uses_chosen_name_or_pane_only() {
         let mut author = member();

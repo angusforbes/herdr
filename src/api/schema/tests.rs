@@ -150,6 +150,22 @@ fn bundled_protocol_schema_refs_resolve_inside_bundle() {
 }
 
 #[test]
+fn room_agent_post_schema_defaults_and_round_trip() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "post", "method": "room.agent.post", "params": {
+            "workspace_id": "w1", "pane_id": "w1:p1", "terminal_id": "t1",
+            "session": "Id:session", "text": "hello"
+        }
+    }))
+    .unwrap();
+    assert!(matches!(&request.method, Method::RoomAgentPost(params) if !params.arrival));
+    assert!(crate::api::request_changes_ui(&request));
+    let restored: Request =
+        serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+    assert_eq!(restored, request);
+}
+
+#[test]
 fn generated_protocol_schema_artifact_is_current() {
     let actual = format!(
         "{}\n",

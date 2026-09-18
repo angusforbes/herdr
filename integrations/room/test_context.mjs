@@ -29,6 +29,19 @@ test('new human delivery includes attributed prior replies but not later/current
   assert.equal(f.requests.at(-1)[0],'/explicit.sock');
   assert.throws(()=>f.transport.sendMessage(f.message,{}),/context unavailable/);
 });
+test('arrival and unsolicited agent posts are attributed history, never fresh deliveries',async()=>{
+  const f=fixture([{...entry(1,'Joined the room.','Ada'),arrival:true,reply_to:null},
+    {...entry(2,'An unsolicited observation','Bob'),reply_to:null},entry(3,'prior human')]);
+  await f.transport.call('/s','room.delivery.register',{workspace_id:'w1'});
+  assert.equal(f.sent.length,0);
+  await f.transport.call('/s','room.delivery.claim',{});
+  f.transport.sendMessage(f.message,{triggerTurn:true,deliverAs:'followUp'});
+  const body=f.sent[0][0].content;
+  assert.match(body,/"speaker":"agent","name":"Ada"/);
+  assert.match(body,/"speaker":"agent","name":"Bob"/);
+  assert.match(body,/Joined the room\./);assert.match(body,/An unsolicited observation/);
+  assert.equal(f.sent.length,1);
+});
 test('different claim times produce identical historical snapshot',async()=>{
   const shared=[entry(1,'question'),entry(2,'answer','Ada'),entry(3,'answer','Bob')];
   const one=fixture(shared),two=fixture([...shared,entry(4,'current'),entry(5,'new reply','Ada')]);

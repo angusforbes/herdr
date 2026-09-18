@@ -3655,6 +3655,38 @@
           ],
           "type": "string"
         },
+        "RoomAgentPostParams": {
+          "properties": {
+            "arrival": {
+              "default": false,
+              "description": "Ignore text and record one deterministic arrival per agent/session/room.",
+              "type": "boolean"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "session": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "pane_id",
+            "terminal_id",
+            "session",
+            "text"
+          ],
+          "type": "object"
+        },
         "RoomDeliveryClaimParams": {
           "properties": {
             "ready": {
@@ -4817,6 +4849,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/RoomPostParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "room.agent.post",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RoomAgentPostParams"
             }
           },
           "required": [
@@ -7700,6 +7748,11 @@
         },
         "Message": {
           "properties": {
+            "arrival": {
+              "default": false,
+              "description": "Deterministic session arrival, durably deduplicated across terminal replacement.",
+              "type": "boolean"
+            },
             "author": {
               "anyOf": [
                 {

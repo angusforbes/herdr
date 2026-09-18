@@ -71,6 +71,8 @@ pub enum Method {
     RoomRead(RoomReadParams),
     #[serde(rename = "room.post")]
     RoomPost(RoomPostParams),
+    #[serde(rename = "room.agent.post")]
+    RoomAgentPost(RoomAgentPostParams),
     #[serde(rename = "room.reply")]
     RoomReply(RoomReplyParams),
     #[serde(rename = "room.delivery.register")]

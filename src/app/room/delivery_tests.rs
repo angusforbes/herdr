@@ -110,6 +110,196 @@ fn reply(app: &mut App, job: &crate::room_delivery::Delivery) -> RoomReplyParams
     params
 }
 
+fn agent_post_params(app: &App, member: &Member, arrival: bool) -> RoomAgentPostParams {
+    RoomAgentPostParams {
+        workspace_id: app.state.workspaces[0].id.clone(),
+        pane_id: member.pane_id.clone(),
+        terminal_id: member.terminal_id.clone(),
+        session: member.session.clone().unwrap(),
+        text: "Unsolicited contribution".into(),
+        arrival,
+    }
+}
+
+#[tokio::test]
+async fn room_agent_post_resolves_author_never_fans_out_but_human_still_does() {
+    let mut app = app();
+    identify(&mut app, "author");
+    let ada = crate::room::members(&app.state, 0).pop().unwrap();
+    let bob = add_member(&mut app, crate::detect::Agent::Pi, Some("/tmp/peer"));
+    let receivers = [register(&mut app, &ada), register(&mut app, &bob)];
+    let pane = app.state.workspaces[0].focused_pane_id().unwrap();
+    let terminal_id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .metadata_tokens
+        .patch(
+            std::collections::HashMap::from([("name".into(), Some("Chosen author".into()))]),
+            None,
+            std::time::Instant::now(),
+        );
+    let current = crate::room::members(&app.state, 0)
+        .into_iter()
+        .find(|m| m.terminal_id == terminal_id.to_string())
+        .unwrap();
+    for arrival in [false, true] {
+        let params = agent_post_params(&app, &current, arrival);
+        assert!(matches!(
+            result(&mut app, Method::RoomAgentPost(params)),
+            ResponseResult::RoomWritten {
+                queued: 0,
+                unavailable: 0,
+                ..
+            }
+        ));
+        let message = app.state.workspaces[0].room.messages.last().unwrap();
+        assert_eq!(message.author.as_ref(), Some(&current));
+        assert_eq!(message.author.as_ref().unwrap().name, "Chosen author");
+        assert!(message.recipients.is_empty() && message.recipient.is_none());
+        assert!(message.reply_to.is_none() && message.expires_unix.is_none());
+        assert_eq!(message.arrival, arrival);
+        for receiver in &receivers {
+            assert!(claim(&mut app, receiver, true).is_none());
+        }
+    }
+    assert!(room_info(&mut app).0.is_empty());
+    assert!(matches!(
+        post(&mut app, None),
+        ResponseResult::RoomWritten { queued: 2, .. }
+    ));
+    for receiver in &receivers {
+        assert!(claim(&mut app, receiver, true).is_some());
+    }
+}
+
+#[tokio::test]
+async fn room_agent_post_rejects_missing_wrong_and_stale_bindings_before_arrival_dedup() {
+    let mut app = app();
+    identify(&mut app, "author");
+    let member = crate::room::members(&app.state, 0).pop().unwrap();
+    let params = agent_post_params(&app, &member, true);
+    result(&mut app, Method::RoomAgentPost(params.clone()));
+    let mut json = serde_json::to_value(Request {
+        id: "post".into(),
+        method: Method::RoomAgentPost(params.clone()),
+    })
+    .unwrap();
+    // Claimed names/labels are not authority and missing session never parses.
+    json["params"]["name"] = "human".into();
+    json["params"]["agent"] = "forged".into();
+    let parsed: Request = serde_json::from_value(json.clone()).unwrap();
+    assert!(matches!(
+        result(&mut app, parsed.method),
+        ResponseResult::RoomWritten { sequence: 1, .. }
+    ));
+    assert_eq!(
+        app.state.workspaces[0].room.messages[0].author,
+        Some(member)
+    );
+    json["params"].as_object_mut().unwrap().remove("session");
+    assert!(serde_json::from_value::<Request>(json).is_err());
+    for field in ["session", "pane_id", "terminal_id", "workspace_id"] {
+        let mut value = serde_json::to_value(&params).unwrap();
+        value[field] = "wrong".into();
+        let wrong = serde_json::from_value(value).unwrap();
+        let response = app.dispatch_api_request("wrong", Method::RoomAgentPost(wrong));
+        assert!(serde_json::from_str::<ErrorResponse>(&response).is_ok());
+    }
+    identify(&mut app, "replacement");
+    let response = app.dispatch_api_request("stale", Method::RoomAgentPost(params));
+    assert!(response.contains("invalid_recipient"));
+    assert_eq!(app.state.workspaces[0].room.messages.len(), 1);
+    let current = crate::room::members(&app.state, 0).pop().unwrap();
+    let params = agent_post_params(&app, &current, true);
+    assert!(matches!(
+        result(&mut app, Method::RoomAgentPost(params.clone())),
+        ResponseResult::RoomWritten { sequence: 2, .. }
+    ));
+    let pane = app.state.workspaces[0].focused_pane_id().unwrap();
+    let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .hook_authority
+        .as_mut()
+        .unwrap()
+        .session_ref = None;
+    let response = app.dispatch_api_request("missing-live-session", Method::RoomAgentPost(params));
+    assert!(response.contains("invalid_recipient"));
+    assert_eq!(app.state.workspaces[0].room.messages.len(), 2);
+}
+
+#[tokio::test]
+async fn room_agent_post_save_failure_rolls_back_and_restored_arrival_skips_save_after_handoff() {
+    let mut app = app();
+    identify(&mut app, "persisted");
+    let member = crate::room::members(&app.state, 0).pop().unwrap();
+    app.no_session = false;
+    for arrival in [false, true] {
+        let params = agent_post_params(&app, &member, arrival);
+        let response = app.room_agent_post_with("fail".into(), params, |snapshot| {
+            assert_eq!(snapshot.workspaces[0].room.messages.len(), 1);
+            Err(std::io::Error::other("injected failure"))
+        });
+        assert!(response.contains("room_save_failed"));
+        assert!(app.state.workspaces[0].room.messages.is_empty());
+        assert_eq!(app.state.workspaces[0].room.next_sequence, 1);
+    }
+    let params = agent_post_params(&app, &member, true);
+    let response = app.room_agent_post_with("save".into(), params, |_| Ok(()));
+    assert!(response.contains("saved"));
+    // Simulate restored room plus recreated runtime terminal carrying the same
+    // live session. The old terminal binding must fail even for a duplicate.
+    app.state.workspaces[0].room =
+        serde_json::from_value(serde_json::to_value(&app.state.workspaces[0].room).unwrap())
+            .unwrap();
+    let pane = app.state.workspaces[0].focused_pane_id().unwrap();
+    let old_id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    let new_id = crate::terminal::TerminalId::alloc();
+    let mut terminal = app.state.terminals.remove(&old_id).unwrap();
+    terminal.id = new_id.clone();
+    app.state.terminals.insert(new_id.clone(), terminal);
+    app.state.workspaces[0].tabs[0]
+        .panes
+        .get_mut(&pane)
+        .unwrap()
+        .attached_terminal_id = new_id;
+    let current = crate::room::members(&app.state, 0).pop().unwrap();
+    assert_ne!(current.terminal_id, member.terminal_id);
+    while app.state.workspaces[0].room.messages.len() < crate::room::MAX_MESSAGES {
+        app.state.workspaces[0]
+            .room
+            .post("filler".into(), None, 0)
+            .unwrap();
+    }
+    let before = app.state.workspaces[0].room.clone();
+    for (identity, success) in [(&member, false), (&current, true)] {
+        let params = agent_post_params(&app, identity, true);
+        let response = app.room_agent_post_with("dedup".into(), params, |_| {
+            panic!("duplicate arrival must not write")
+        });
+        if success {
+            let result: SuccessResponse = serde_json::from_str(&response).unwrap();
+            assert!(matches!(
+                result.result,
+                ResponseResult::RoomWritten {
+                    sequence: 1,
+                    queued: 0,
+                    ..
+                }
+            ));
+        } else {
+            assert!(response.contains("invalid_recipient"));
+        }
+    }
+    assert_eq!(app.state.workspaces[0].room, before);
+    assert!(room_info(&mut app).0.is_empty());
+    app.no_session = true;
+}
+
 #[tokio::test]
 async fn room_ui_broadcasts_to_every_current_member_despite_legacy_target() {
     let mut app = app();

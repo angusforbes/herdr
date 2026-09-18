@@ -145,7 +145,7 @@ async fn room_copy_preserves_wrap_newlines_and_excludes_chrome_and_controls() {
     let mut app = app();
     app.state.select_room();
     geometry(&mut app);
-    let width = app.state.room_ui.transcript_area.width as usize;
+    let width = app.state.room_ui.transcript_area.width as usize - 2;
     app.state.workspaces[0]
         .room
         .post(format!("{}界e\u{301}\x1b\0", "x".repeat(width)), None, 0)
@@ -168,7 +168,7 @@ async fn room_copy_preserves_wrap_newlines_and_excludes_chrome_and_controls() {
     match app.event_rx.try_recv().unwrap() {
         crate::events::AppEvent::ClipboardWrite { content } => assert_eq!(
             content,
-            format!("{}\n界e\u{301}\n", "x".repeat(width)).as_bytes()
+            format!("{}\n界e\u{301}\n\n", "x".repeat(width)).as_bytes()
         ),
         other => panic!("{other:?}"),
     }
@@ -223,8 +223,8 @@ async fn room_selection_reversed_unicode_highlight_clipboard_and_isolation() {
             .iter()
             .position(|s| s == "a界e\u{301}Z")
             .unwrap() as u16;
-        let start = Position::new(area.x + 2, area.y + row); // second cell of 界 snaps to whole glyph
-        let end = Position::new(area.x + 7, area.y + row + 1);
+        let start = Position::new(area.x + 3, area.y + row); // inset + second cell of 界
+        let end = Position::new(area.x + 8, area.y + row + 1);
         let (a, b) = if reverse { (end, start) } else { (start, end) };
         mouse(&mut app, MouseEventKind::Down(MouseButton::Left), a);
         mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), b);
@@ -260,10 +260,10 @@ async fn room_selection_reversed_unicode_highlight_clipboard_and_isolation() {
             .draw(|frame| crate::ui::render(&app.state, frame))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert!(buffer[(area.x + 1, area.y + row)]
+        assert!(buffer[(area.x + 2, area.y + row)]
             .modifier
             .contains(Modifier::REVERSED));
-        assert!(buffer[(area.x + 3, area.y + row)]
+        assert!(buffer[(area.x + 4, area.y + row)]
             .modifier
             .contains(Modifier::REVERSED));
         assert!(!buffer[(area.x, area.y + row)]
@@ -326,7 +326,7 @@ async fn room_selection_scroll_clamp_resize_and_chrome_ownership() {
     geometry(&mut app);
     let area = app.state.room_ui.transcript_area;
     let start = area.as_position();
-    let end = Position::new(area.x + 6, area.y + 1);
+    let end = Position::new(area.x + 7, area.y + 1);
     mouse(&mut app, MouseEventKind::Down(MouseButton::Left), start);
     mouse(&mut app, MouseEventKind::Up(MouseButton::Left), end);
     let copied = app
