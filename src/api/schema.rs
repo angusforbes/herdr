@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod agents;
 pub mod common;
+pub mod conversations;
 pub mod events;
 pub mod integrations;
 pub mod panes;
@@ -15,6 +16,7 @@ pub mod worktrees;
 
 pub use agents::*;
 pub use common::*;
+pub use conversations::*;
 pub use events::*;
 pub use integrations::*;
 pub use panes::*;
@@ -107,6 +109,10 @@ pub enum Method {
     AgentList(EmptyParams),
     #[serde(rename = "agent.get")]
     AgentGet(AgentTarget),
+    #[serde(rename = "agent.conversation")]
+    AgentConversation(AgentConversationParams),
+    #[serde(rename = "agent.fork")]
+    AgentFork(AgentForkParams),
     #[serde(rename = "agent.read")]
     AgentRead(AgentReadParams),
     #[serde(rename = "agent.explain")]

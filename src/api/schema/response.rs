@@ -97,6 +97,30 @@ pub enum ResponseResult {
     AgentInfo {
         agent: AgentInfo,
     },
+    AgentConversation {
+        session_id: String,
+        session_path: String,
+        messages: Vec<crate::pi_conversation::ConversationMessage>,
+        /// Total matching messages before pagination.
+        total: usize,
+        partial_tail: bool,
+        offset: usize,
+        limit: usize,
+        has_more: bool,
+        next_offset: Option<usize>,
+    },
+    AgentForked {
+        session_id: String,
+        session_path: String,
+        session_ref: super::agents::AgentSessionInfo,
+        extension_path: String,
+        agent: AgentInfo,
+        pane: PaneInfo,
+        argv: Vec<String>,
+        /// Queued for shell readiness; not proof of submission or Pi readiness.
+        launch_requested: bool,
+        ready: bool,
+    },
     AgentStarted {
         agent: AgentInfo,
         argv: Vec<String>,

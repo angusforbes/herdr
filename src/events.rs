@@ -171,6 +171,10 @@ pub enum AppEvent {
     WorktreeAddFinished(Box<WorktreeAddResult>),
     /// Background `git worktree remove` completed.
     WorktreeRemoveFinished(Box<WorktreeRemoveResult>),
+    /// Recheck only pre-submission readiness of a reserved fork terminal.
+    ConversationLaunchRetry {
+        terminal_id: crate::terminal::TerminalId,
+    },
     /// The AI search command for the search pane finished.
     SearchPaneAiFinished {
         generation: u64,

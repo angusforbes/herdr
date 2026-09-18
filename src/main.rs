@@ -76,6 +76,8 @@ mod metadata_tokens;
 mod noninteractive_process;
 mod pane;
 mod pane_graphics_files;
+mod pi_conversation;
+mod pi_fork;
 mod persist;
 mod platform;
 mod plugin_command;

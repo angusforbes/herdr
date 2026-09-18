@@ -15,6 +15,7 @@ mod panes;
 mod release_notes;
 mod scrollbar;
 mod search_pane;
+mod conversation;
 mod settings;
 mod sidebar;
 mod status;

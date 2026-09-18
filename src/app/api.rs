@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 mod agent_view;
 mod agents;
+mod conversations;
 mod env;
 mod integrations;
 mod layouts;
@@ -204,6 +205,11 @@ impl App {
 
         if let AppEvent::WorktreeRemoveFinished(result) = ev {
             self.handle_worktree_remove_finished(*result);
+            return Vec::new();
+        }
+
+        if let AppEvent::ConversationLaunchRetry { terminal_id } = ev {
+            self.handle_conversation_launch_retry(terminal_id);
             return Vec::new();
         }
 
@@ -1080,6 +1086,10 @@ impl App {
                     "agent.wait is handled by the api server",
                 );
             }
+            Method::AgentConversation(params) => {
+                return self.handle_agent_conversation(request.id, params);
+            }
+            Method::AgentFork(params) => return self.handle_agent_fork(request.id, params),
             Method::AgentRead(params) => return self.handle_agent_read(request.id, params),
             Method::AgentExplain(target) => return self.handle_agent_explain(request.id, target),
             Method::AgentSendKeys(params) => {

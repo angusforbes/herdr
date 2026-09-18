@@ -1222,6 +1222,67 @@
     },
     "request": {
       "$defs": {
+        "AgentConversationParams": {
+          "description": "Read the currently bound Pi v3 conversation. No arbitrary file paths are accepted.",
+          "properties": {
+            "around_entry_id": {
+              "description": "With no query, center the page on this visible entry, overriding offset.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "description": "Page size: defaults to 100; must be between 1 and 500.",
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "offset": {
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
+        "AgentForkParams": {
+          "properties": {
+            "position": {
+              "$ref": "#/schemas/request/$defs/BranchPosition",
+              "default": "rewrite"
+            },
+            "reference": {
+              "$ref": "#/schemas/request/$defs/MessageRef"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "reference"
+          ],
+          "type": "object"
+        },
         "AgentPromptParams": {
           "properties": {
             "target": {
@@ -1688,6 +1749,13 @@
             "target"
           ],
           "type": "object"
+        },
+        "BranchPosition": {
+          "enum": [
+            "rewrite",
+            "continue"
+          ],
+          "type": "string"
         },
         "ClientWindowTitleSetParams": {
           "properties": {
@@ -2292,6 +2360,30 @@
           "required": [
             "path",
             "ratio"
+          ],
+          "type": "object"
+        },
+        "MessageRef": {
+          "properties": {
+            "ancestry_hash": {
+              "description": "Hash of the selected entry and its complete ancestry, not the growing file.",
+              "type": "string"
+            },
+            "entry_id": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "session_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_path",
+            "session_id",
+            "entry_id",
+            "ancestry_hash"
           ],
           "type": "object"
         },
@@ -4942,6 +5034,38 @@
         {
           "properties": {
             "method": {
+              "const": "agent.conversation",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentConversationParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.fork",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentForkParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.read",
               "type": "string"
             },
@@ -6353,6 +6477,57 @@
           ],
           "type": "string"
         },
+        "ConversationMessage": {
+          "properties": {
+            "active": {
+              "type": "boolean"
+            },
+            "can_continue": {
+              "type": "boolean"
+            },
+            "can_rewrite": {
+              "type": "boolean"
+            },
+            "depth": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "parent_message_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reference": {
+              "$ref": "#/schemas/success_response/$defs/MessageRef"
+            },
+            "role": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "text_truncated": {
+              "default": false,
+              "type": "boolean"
+            },
+            "timestamp": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "reference",
+            "role",
+            "text",
+            "timestamp",
+            "depth",
+            "active",
+            "can_rewrite",
+            "can_continue"
+          ],
+          "type": "object"
+        },
         "EventData": {
           "oneOf": [
             {
@@ -7299,6 +7474,30 @@
               "type": "object"
             }
           ]
+        },
+        "MessageRef": {
+          "properties": {
+            "ancestry_hash": {
+              "description": "Hash of the selected entry and its complete ancestry, not the growing file.",
+              "type": "string"
+            },
+            "entry_id": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "session_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_path",
+            "session_id",
+            "entry_id",
+            "ancestry_hash"
+          ],
+          "type": "object"
         },
         "NotificationShowReason": {
           "enum": [
@@ -8906,6 +9105,120 @@
               "required": [
                 "type",
                 "agent"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "has_more": {
+                  "type": "boolean"
+                },
+                "limit": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "messages": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/ConversationMessage"
+                  },
+                  "type": "array"
+                },
+                "next_offset": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "offset": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "partial_tail": {
+                  "type": "boolean"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "session_path": {
+                  "type": "string"
+                },
+                "total": {
+                  "description": "Total matching messages before pagination.",
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "agent_conversation",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "session_id",
+                "session_path",
+                "messages",
+                "total",
+                "partial_tail",
+                "offset",
+                "limit",
+                "has_more"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "agent": {
+                  "$ref": "#/schemas/success_response/$defs/AgentInfo"
+                },
+                "argv": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "extension_path": {
+                  "type": "string"
+                },
+                "launch_requested": {
+                  "description": "Queued for shell readiness; not proof of submission or Pi readiness.",
+                  "type": "boolean"
+                },
+                "pane": {
+                  "$ref": "#/schemas/success_response/$defs/PaneInfo"
+                },
+                "ready": {
+                  "type": "boolean"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "session_path": {
+                  "type": "string"
+                },
+                "session_ref": {
+                  "$ref": "#/schemas/success_response/$defs/AgentSessionInfo"
+                },
+                "type": {
+                  "const": "agent_forked",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "session_id",
+                "session_path",
+                "session_ref",
+                "extension_path",
+                "agent",
+                "pane",
+                "argv",
+                "launch_requested",
+                "ready"
               ],
               "type": "object"
             },

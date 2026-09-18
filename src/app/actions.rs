@@ -2950,6 +2950,7 @@ impl AppState {
             AppEvent::TabBarCommandFinished { .. } => Vec::new(),
             AppEvent::PluginCommandFinished { .. } => Vec::new(),
             AppEvent::SearchPaneAiFinished { .. } => Vec::new(),
+            AppEvent::ConversationLaunchRetry { .. } => Vec::new(),
         }
     }
 

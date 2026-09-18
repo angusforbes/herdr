@@ -84,6 +84,7 @@ website-build:
 
 # Test bundled agent integration assets
 integration-assets-test:
+    node --test src/integration/assets/pi/herdr-fork-prefill.test.mjs
     bun test src/integration/assets/herdr-agent-state.test.ts
     bun test src/integration/assets/opencode/herdr-agent-state.test.ts
     bun test src/integration/assets/opencode/herdr-tui-session.test.ts

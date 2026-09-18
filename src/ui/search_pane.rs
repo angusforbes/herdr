@@ -41,6 +41,11 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
         buf[(area.x, y)].set_style(border_style);
     }
 
+    if app.conversation_preview.is_some() {
+        super::conversation::render_conversation(app, frame, area);
+        return;
+    }
+
     // title + mode chips
     let title = title_row(area);
     if title.height > 0 {
@@ -52,7 +57,13 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
             title,
         );
         let (kw, ai) = mode_chip_rects(area);
-        render_chip(frame, kw, KEYWORD_CHIP, state.mode == SearchPaneMode::Keyword, p);
+        render_chip(
+            frame,
+            kw,
+            KEYWORD_CHIP,
+            state.mode == SearchPaneMode::Keyword,
+            p,
+        );
         render_chip(frame, ai, AI_CHIP, state.mode == SearchPaneMode::Ai, p);
     }
 
@@ -99,7 +110,10 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
         };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                format!(" {}", truncate_end(&text, usize::from(status.width).saturating_sub(1))),
+                format!(
+                    " {}",
+                    truncate_end(&text, usize::from(status.width).saturating_sub(1))
+                ),
                 style,
             ))),
             status,
@@ -113,7 +127,12 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
     }
     let rows = body_rows(state);
     let width = usize::from(body.width);
-    for (i, row) in rows.iter().skip(state.scroll).take(usize::from(body.height)).enumerate() {
+    for (i, row) in rows
+        .iter()
+        .skip(state.scroll)
+        .take(usize::from(body.height))
+        .enumerate()
+    {
         let y = body.y + i as u16;
         let rect = Rect::new(body.x, y, body.width, 1);
         match row {
@@ -166,10 +185,7 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
                 let spans = vec![
                     Span::styled(marker, Style::default().fg(p.accent)),
                     Span::styled(before, base),
-                    Span::styled(
-                        matched,
-                        base.fg(p.accent).add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(matched, base.fg(p.accent).add_modifier(Modifier::BOLD)),
                     Span::styled(after, base),
                 ];
                 frame.render_widget(Paragraph::new(Line::from(spans)), rect);
@@ -178,7 +194,13 @@ pub(super) fn render_search_pane(app: &AppState, frame: &mut Frame, area: Rect) 
     }
 }
 
-fn render_chip(frame: &mut Frame, rect: Rect, label: &str, active: bool, p: &crate::app::state::Palette) {
+fn render_chip(
+    frame: &mut Frame,
+    rect: Rect,
+    label: &str,
+    active: bool,
+    p: &crate::app::state::Palette,
+) {
     if rect.width == 0 {
         return;
     }
@@ -212,37 +234,117 @@ fn tail_fit(text: &str, avail: usize) -> String {
 }
 
 /// Split the snippet into (before, match, after), windowed so the match is visible
-/// in `avail` columns. The match length is taken from the searched query when it
-/// still appears in the snippet; otherwise the whole line is shown plain.
-fn window_snippet(hit: &crate::app::search_pane::SearchHit, avail: usize) -> (String, String, String) {
+/// in `avail` display columns. Match bounds are original-character indices,
+/// never terminal columns (which may span multiple wrapped rows).
+fn window_snippet(
+    hit: &crate::app::search_pane::SearchHit,
+    avail: usize,
+) -> (String, String, String) {
     let chars: Vec<char> = hit.snippet.chars().collect();
-    let match_len = (hit.text_match.end.col as usize)
-        .saturating_sub(hit.text_match.start.col as usize)
-        .clamp(1, chars.len().saturating_sub(hit.match_char).max(1));
     let start = hit.match_char.min(chars.len());
-    let end = (start + match_len).min(chars.len());
-
-    // Window: try to show ~1/3 context before the match.
+    let end = hit.match_end_char.max(start).min(chars.len());
+    let widths: Vec<usize> = chars
+        .iter()
+        .map(|ch| unicode_width::UnicodeWidthChar::width(*ch).unwrap_or(0))
+        .collect();
     let mut win_start = 0;
-    if chars.len() > avail {
-        let lead = avail / 3;
-        win_start = start.saturating_sub(lead);
-        if win_start + avail > chars.len() {
-            win_start = chars.len().saturating_sub(avail);
+    if widths.iter().sum::<usize>() > avail {
+        win_start = start;
+        let mut lead = 0;
+        while win_start > 0 && lead + widths[win_start - 1] <= avail / 3 {
+            win_start -= 1;
+            lead += widths[win_start];
+        }
+        // Do not start a window with a detached combining mark.
+        while win_start > 0 && widths.get(win_start) == Some(&0) {
+            win_start -= 1;
         }
     }
-    let win_end = (win_start + avail).min(chars.len());
-    let slice = |a: usize, b: usize| chars[a.min(b)..b].iter().collect::<String>();
-    let mut before = slice(win_start, start.max(win_start).min(win_end));
-    let matched = slice(start.max(win_start).min(win_end), end.min(win_end).max(win_start));
-    let mut after = slice(end.max(win_start).min(win_end), win_end);
-    if win_start > 0 && !before.is_empty() {
-        before.replace_range(..before.chars().next().map_or(0, char::len_utf8), "…");
+    let left_ellipsis = win_start > 0 && avail > 0;
+    let budget = avail.saturating_sub(usize::from(left_ellipsis));
+    let mut win_end = win_start;
+    let mut used = 0;
+    while win_end < chars.len() && used + widths[win_end] <= budget {
+        used += widths[win_end];
+        win_end += 1;
     }
-    if win_end < chars.len() && !after.is_empty() {
-        let last = after.chars().last().map_or(0, char::len_utf8);
-        let cut = after.len() - last;
-        after.replace_range(cut.., "…");
+    let right_ellipsis = win_end < chars.len() && budget > 0;
+    if right_ellipsis {
+        while win_end > win_start && used + 1 > budget {
+            win_end -= 1;
+            used -= widths[win_end];
+        }
     }
+    let slice = |a: usize, b: usize| chars[a..b].iter().collect::<String>();
+    let match_start = start.clamp(win_start, win_end);
+    let match_end = end.clamp(match_start, win_end);
+    let before = format!(
+        "{}{}",
+        if left_ellipsis { "…" } else { "" },
+        slice(win_start, match_start)
+    );
+    let matched = slice(match_start, match_end);
+    let after = format!(
+        "{}{}",
+        slice(match_end, win_end),
+        if right_ellipsis { "…" } else { "" }
+    );
     (before, matched, after)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        app::search_pane::SearchHit,
+        ghostty::ActiveScreen,
+        pane::{TerminalTextMatch, TerminalTextPoint},
+    };
+
+    fn hit(snippet: &str, start: usize, end: usize) -> SearchHit {
+        SearchHit {
+            snippet: snippet.into(),
+            match_char: start,
+            match_end_char: end,
+            conversation: None,
+            text_match: TerminalTextMatch {
+                start: TerminalTextPoint { row: 0, col: 37 },
+                end: TerminalTextPoint { row: 1, col: 4 },
+                scan_cols: 40,
+                scan_screen: ActiveScreen::Primary,
+                source_fingerprint: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn wrapped_match_uses_original_span_not_terminal_columns() {
+        assert_eq!(
+            window_snippet(&hit("界 wrapped match end", 2, 15), 40),
+            ("界 ".into(), "wrapped match".into(), " end".into())
+        );
+        assert_eq!(
+            window_snippet(&hit("İé", 1, 2), 10),
+            ("İ".into(), "é".into(), "".into())
+        );
+    }
+
+    #[test]
+    fn snippet_window_respects_display_columns_and_combining_marks() {
+        for snippet in [
+            "界界界界 é target 界界界",
+            "e\u{301}e\u{301}e\u{301} target trailing text",
+        ] {
+            let start = snippet[..snippet.find("target").unwrap()].chars().count();
+            let hit = hit(snippet, start, start + 6);
+            for avail in 0..40 {
+                let (before, matched, after) = window_snippet(&hit, avail);
+                assert!(display_width(&format!("{before}{matched}{after}")) <= avail);
+                if avail >= 16 {
+                    assert_eq!(matched, "target");
+                }
+                assert!(!before.starts_with('\u{301}'));
+            }
+        }
+    }
 }
