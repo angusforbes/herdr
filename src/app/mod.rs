@@ -18,10 +18,10 @@ mod git_refresh;
 mod ids;
 mod input;
 pub(crate) mod pane_graphics;
-pub(crate) mod search_pane;
 mod popup;
 mod runtime;
 mod runtime_mutations;
+pub(crate) mod search_pane;
 mod session;
 pub mod state;
 mod tab_bar_status;
@@ -142,6 +142,7 @@ pub struct App {
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
+    pub(crate) search_ai_task: Option<tokio::task::JoinHandle<()>>,
     pub(crate) detached_process_children: Vec<std::process::Child>,
     tab_bar_status_generation: u64,
     tab_bar_datetimes: Vec<tab_bar_status::TabBarDatetimeRuntime>,
@@ -589,6 +590,7 @@ impl App {
             copy_mode: None,
             workspace_scroll: 0,
             agent_panel_scroll: 0,
+            navigate_agents: false,
             tab_scroll: 0,
             tab_scroll_follow_active: true,
             mobile_switcher_scroll: 0,
@@ -780,6 +782,7 @@ impl App {
             pending_agent_resume_deadline: None,
             session_save_deadline: None,
             session_save_thread: None,
+            search_ai_task: None,
             detached_process_children: Vec::new(),
             tab_bar_status_generation: 0,
             tab_bar_datetimes: Vec::new(),
@@ -1781,7 +1784,9 @@ impl App {
                     match key.kind {
                         crossterm::event::KeyEventKind::Press => {
                             let initial_context = self.terminal_input_context();
-                            let target = if initial_context.is_some() {
+                            let target = if initial_context.is_some()
+                                || self.panel_arrow_targets_terminal(&key)
+                            {
                                 self.handle_terminal_key_headless_from(source_id, key.clone())
                             } else {
                                 self.handle_non_terminal_key_headless(key.clone());

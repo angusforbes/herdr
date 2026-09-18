@@ -362,6 +362,18 @@ pub struct KeysConfig {
     pub goto: BindingConfig,
     /// Toggle the right-hand search pane (keyword / AI search across agent panes). Default: "ctrl+s"
     pub search_pane: BindingConfig,
+    /// Cycle focus through Spaces, Agents, terminal, and Search (if open). Default: "ctrl+tab".
+    pub focus_panel_next: BindingConfig,
+    /// Cycle panel focus in reverse. Default: "ctrl+shift+tab".
+    pub focus_panel_previous: BindingConfig,
+    /// Select the previous result when search is open in normal modes. Default: "ctrl+up".
+    pub search_result_previous: BindingConfig,
+    /// Select the next result when search is open in normal modes. Default: "ctrl+down".
+    pub search_result_next: BindingConfig,
+    /// Focus the query when search is open in normal modes. Default: "ctrl+'".
+    pub search_input: BindingConfig,
+    /// Switch keyword / AI mode when search is open in normal modes. Default: "ctrl+/".
+    pub search_mode: BindingConfig,
     /// Move workspace selection up in navigate mode. Default: "up".
     pub navigate_workspace_up: BindingConfig,
     /// Move workspace selection down in navigate mode. Default: "down".
@@ -499,6 +511,18 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     search_pane: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    focus_panel_next: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    focus_panel_previous: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search_result_previous: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search_result_next: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search_input: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search_mode: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     navigate_workspace_up: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     navigate_workspace_down: Option<BindingConfig>,
@@ -631,6 +655,12 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(workspace_picker);
         apply_field!(goto);
         apply_field!(search_pane);
+        apply_field!(focus_panel_next);
+        apply_field!(focus_panel_previous);
+        apply_field!(search_result_previous);
+        apply_field!(search_result_next);
+        apply_field!(search_input);
+        apply_field!(search_mode);
         apply_field!(navigate_workspace_up);
         apply_field!(navigate_workspace_down);
         apply_field!(navigate_pane_left);
@@ -737,6 +767,12 @@ impl KeysConfig {
         copy_effective_action_field!(workspace_picker, keybinds.workspace_picker);
         copy_effective_action_field!(goto, keybinds.goto);
         copy_effective_action_field!(search_pane, keybinds.search_pane);
+        copy_effective_action_field!(focus_panel_next, keybinds.focus_panel_next);
+        copy_effective_action_field!(focus_panel_previous, keybinds.focus_panel_previous);
+        copy_effective_action_field!(search_result_previous, keybinds.search_result_previous);
+        copy_effective_action_field!(search_result_next, keybinds.search_result_next);
+        copy_effective_action_field!(search_input, keybinds.search_input);
+        copy_effective_action_field!(search_mode, keybinds.search_mode);
         copy_effective_action_field!(navigate_workspace_up, keybinds.navigate.workspace_up);
         copy_effective_action_field!(navigate_workspace_down, keybinds.navigate.workspace_down);
         copy_effective_action_field!(navigate_pane_left, keybinds.navigate.pane_left);
@@ -1052,6 +1088,12 @@ impl Default for KeysConfig {
             workspace_picker: BindingConfig::one("prefix+w"),
             goto: BindingConfig::one("prefix+g"),
             search_pane: BindingConfig::one("ctrl+s"),
+            focus_panel_next: BindingConfig::one("ctrl+tab"),
+            focus_panel_previous: BindingConfig::one("ctrl+shift+tab"),
+            search_result_previous: BindingConfig::one("ctrl+up"),
+            search_result_next: BindingConfig::one("ctrl+down"),
+            search_input: BindingConfig::one("ctrl+'"),
+            search_mode: BindingConfig::one("ctrl+/"),
             navigate_workspace_up: BindingConfig::one("up"),
             navigate_workspace_down: BindingConfig::one("down"),
             navigate_pane_left: BindingConfig::one("h"),
@@ -1252,6 +1294,89 @@ impl Default for AdvancedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_and_search_key_overlays_preserve_defaults_and_overrides() {
+        let fields = [
+            "focus_panel_next",
+            "focus_panel_previous",
+            "search_result_previous",
+            "search_result_next",
+            "search_input",
+            "search_mode",
+        ];
+        let defaults = Config::default();
+        let default_profile = defaults.keys.local_profile(&defaults.keybinds());
+        let default_value = toml::Value::try_from(&default_profile).unwrap();
+        for (field, expected) in fields.iter().zip([
+            "ctrl+tab",
+            "ctrl+shift+tab",
+            "ctrl+up",
+            "ctrl+down",
+            "ctrl+'",
+            "ctrl+/",
+        ]) {
+            assert_eq!(default_value[*field].as_str(), Some(expected));
+        }
+
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+focus_panel_next = ["prefix+f1", "ctrl+f1"]
+focus_panel_previous = "prefix+f2"
+search_result_previous = "prefix+f3"
+search_result_next = "prefix+f4"
+search_input = "ctrl+quote"
+search_mode = ""
+"#,
+        )
+        .unwrap();
+        for field in fields {
+            assert!(config.keys.key_field_is_user_configured(field));
+        }
+        let kb = config.keybinds();
+        assert_eq!(kb.focus_panel_next.labels(), ["prefix+f1", "ctrl+f1"]);
+        assert_eq!(
+            kb.focus_panel_previous.label().as_deref(),
+            Some("prefix+f2")
+        );
+        assert_eq!(
+            kb.search_result_previous.label().as_deref(),
+            Some("prefix+f3")
+        );
+        assert_eq!(kb.search_result_next.label().as_deref(), Some("prefix+f4"));
+        assert_eq!(kb.search_input.label().as_deref(), Some("ctrl+'"));
+        assert!(kb.search_mode.bindings.is_empty());
+        assert!(config.collect_diagnostics().is_empty());
+
+        let profile = config.keys.local_profile(&kb);
+        let serialized = toml::to_string(&profile).unwrap();
+        let restored: KeysConfig = toml::from_str(&serialized).unwrap();
+        let restored_value = toml::Value::try_from(&restored).unwrap();
+        let profile_value = toml::Value::try_from(&profile).unwrap();
+        for field in fields {
+            assert_eq!(restored_value[field], profile_value[field]);
+        }
+
+        let partial: Config = toml::from_str("[keys]\nsearch_mode = \"\"").unwrap();
+        assert_eq!(
+            partial.keys.focus_panel_next,
+            defaults.keys.focus_panel_next
+        );
+        assert_eq!(
+            partial.keys.focus_panel_previous,
+            defaults.keys.focus_panel_previous
+        );
+        assert_eq!(
+            partial.keys.search_result_previous,
+            defaults.keys.search_result_previous
+        );
+        assert_eq!(
+            partial.keys.search_result_next,
+            defaults.keys.search_result_next
+        );
+        assert_eq!(partial.keys.search_input, defaults.keys.search_input);
+    }
 
     #[test]
     fn update_config_defaults_and_parses() {

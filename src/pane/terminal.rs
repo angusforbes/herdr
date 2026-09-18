@@ -265,6 +265,40 @@ impl PaneTerminal {
         buffer.search_with_lines(query, case_sensitive, active_screen)
     }
 
+    /// Resolve a bounded batch of AI quote alternatives from one recent snapshot.
+    /// Never re-extract all retained history for each candidate quote.
+    pub(crate) fn find_recent_text_quotes(
+        &self,
+        quotes: &[Vec<String>],
+        max_rows: usize,
+    ) -> Vec<Option<(usize, TerminalTextMatch, String)>> {
+        let snapshot = (|| {
+            let core = self.ghostty.core.lock().ok()?;
+            let cols = core.terminal.cols().ok()?;
+            let end = core.terminal.total_rows().ok()?;
+            let start = end.saturating_sub(max_rows);
+            let rows = core.terminal.screen_text_rows_range(start, end).ok()?;
+            let screen = core.terminal.active_screen().ok()?;
+            Some((cols, rows, u32::try_from(start).ok()?, screen))
+        })();
+        let Some((cols, rows, start, screen)) = snapshot else {
+            return vec![None; quotes.len()];
+        };
+        let buffer = RetainedTextBuffer::new_search(cols, rows, start);
+        quotes
+            .iter()
+            .map(|alternatives| {
+                alternatives.iter().enumerate().find_map(|(index, query)| {
+                    buffer
+                        .search_with_lines(query, false, screen)
+                        .into_iter()
+                        .max_by_key(|(hit, _)| (hit.start.row, hit.start.col))
+                        .map(|(hit, line)| (index, hit, line))
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn text_match_is_current(&self, text_match: TerminalTextMatch) -> bool {
         self.text_matches_are_current(&[text_match])
             .first()

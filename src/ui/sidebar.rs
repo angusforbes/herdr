@@ -202,7 +202,13 @@ pub(crate) fn workspace_selection_icon(app: &AppState, ws_idx: usize) -> (&'stat
 }
 
 /// Agent-row state icon: state glyph, coloured to match the agent's workspace circle.
-fn agent_state_icon(app: &AppState, entry_ws_idx: usize, state: AgentState, seen: bool, p: &Palette) -> (&'static str, Style) {
+fn agent_state_icon(
+    app: &AppState,
+    entry_ws_idx: usize,
+    state: AgentState,
+    seen: bool,
+    p: &Palette,
+) -> (&'static str, Style) {
     let (icon, _) = state_icon(state, seen, app.status_indicators, p);
     (icon, Style::default().fg(app.workspace_color(entry_ws_idx)))
 }
@@ -1012,21 +1018,24 @@ pub(super) fn render_sidebar(
     frame
         .buffer_mut()
         .set_style(area, Style::default().bg(p.sidebar_bg));
-    let is_navigating = matches!(app.mode, Mode::Navigate);
-    let sep_style = if is_navigating {
-        Style::default().fg(p.accent)
-    } else {
-        Style::default().fg(p.surface_dim)
-    };
-
+    let is_navigating = app.mode == Mode::Navigate && !app.navigate_agents;
+    let agents_focused = app.mode == Mode::Navigate && app.navigate_agents;
+    let (ws_area, detail_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
     let sep_x = area.x + area.width.saturating_sub(1);
     let buf = frame.buffer_mut();
     for y in area.y..area.y + area.height {
+        let focused = if y < detail_area.y {
+            is_navigating
+        } else {
+            agents_focused
+        };
         buf[(sep_x, y)].set_symbol("│");
-        buf[(sep_x, y)].set_style(sep_style);
+        buf[(sep_x, y)].set_style(Style::default().fg(if focused {
+            p.accent
+        } else {
+            p.surface_dim
+        }));
     }
-
-    let (ws_area, detail_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
 
     render_workspace_list(app, terminal_runtimes, frame, ws_area, is_navigating);
     render_agent_detail(app, terminal_runtimes, frame, detail_area);
@@ -1213,7 +1222,11 @@ fn resolved_token_spans(
                         .text
                         .char_indices()
                         .map(|(i, c)| i + c.len_utf8())
-                        .take_while(|&end| remaining.len() >= end && remaining.is_char_boundary(end) && remaining[..end] == segment.text[..end])
+                        .take_while(|&end| {
+                            remaining.len() >= end
+                                && remaining.is_char_boundary(end)
+                                && remaining[..end] == segment.text[..end]
+                        })
                         .last()
                         .unwrap_or(0);
                     if take == 0 {
@@ -1341,7 +1354,9 @@ fn render_workspace_list(
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
                 " spaces",
-                Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(if is_navigating { p.accent } else { p.overlay0 })
+                    .add_modifier(Modifier::BOLD),
             )])),
             Rect::new(area.x, area.y, area.width, 1),
         );
@@ -1558,7 +1573,13 @@ fn render_agent_detail(
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             " agents",
-            Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(if app.mode == Mode::Navigate && app.navigate_agents {
+                    p.accent
+                } else {
+                    p.overlay0
+                })
+                .add_modifier(Modifier::BOLD),
         )])),
         Rect::new(area.x, area.y + 1, area.width, 1),
     );
@@ -1615,7 +1636,13 @@ fn render_agent_detail(
             Style::default()
         };
         let name_style = if is_active {
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(if app.mode == Mode::Navigate && app.navigate_agents {
+                    p.accent
+                } else {
+                    p.text
+                })
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
         };

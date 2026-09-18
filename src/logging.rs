@@ -58,11 +58,78 @@ pub(crate) fn shutdown(role: &'static str) {
     );
 }
 
-pub(crate) fn api_request_started(request_id: &str, method: &'static str, changes_ui: bool) {
+/// Attribution details for an API request.
+///
+/// The API logger reduces every request to a `&'static str` method name, which
+/// means an injected prompt cannot be traced back to the pane it was delivered
+/// to. That makes a replayed or duplicated injection detectable (two entries
+/// appear) but not attributable (neither entry says where it went).
+///
+/// `ApiTrace` restores attribution without logging message content. The payload
+/// itself is deliberately never recorded: it is verbatim conversation text and
+/// belongs in the session transcript, not in a plaintext server log. A length
+/// plus a truncated SHA-256 is enough to prove that two injections carried the
+/// same bytes, which is what identifies a replay.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ApiTrace {
+    /// Pane or agent the request targets, when the method addresses one.
+    pub(crate) target_pane: Option<String>,
+    /// Byte length of the payload, when the method carries one.
+    pub(crate) payload_len: Option<usize>,
+    /// First 12 hex characters of the payload's SHA-256. Content is not logged.
+    pub(crate) payload_sha: Option<String>,
+}
+
+impl ApiTrace {
+    /// Build a trace for a payload-carrying request.
+    pub(crate) fn with_payload(target_pane: &str, payload: &str) -> Self {
+        Self {
+            target_pane: Some(target_pane.to_string()),
+            payload_len: Some(payload.len()),
+            payload_sha: Some(payload_fingerprint(payload)),
+        }
+    }
+
+    fn target_field(&self) -> &str {
+        self.target_pane.as_deref().unwrap_or("-")
+    }
+
+    fn len_field(&self) -> i64 {
+        self.payload_len.map(|len| len as i64).unwrap_or(-1)
+    }
+
+    fn sha_field(&self) -> &str {
+        self.payload_sha.as_deref().unwrap_or("-")
+    }
+}
+
+/// First 12 hex characters of the SHA-256 of `payload`.
+///
+/// Truncated deliberately: enough to correlate identical injections in one log,
+/// short enough that it is not a practical handle for recovering content.
+fn payload_fingerprint(payload: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(payload.as_bytes());
+    digest
+        .iter()
+        .take(6)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+pub(crate) fn api_request_started(
+    request_id: &str,
+    method: &'static str,
+    changes_ui: bool,
+    trace: &ApiTrace,
+) {
     let event = "api.request.start";
     let subsystem = "api";
     let outcome = "started";
     let message = "api request received";
+    let target_pane = trace.target_field();
+    let payload_len = trace.len_field();
+    let payload_sha = trace.sha_field();
     if changes_ui && !is_routine_api_method(method) {
         tracing::info!(
             event,
@@ -71,6 +138,9 @@ pub(crate) fn api_request_started(request_id: &str, method: &'static str, change
             request_id,
             method,
             changes_ui,
+            target_pane,
+            payload_len,
+            payload_sha,
             "{message}"
         );
     } else {
@@ -81,6 +151,9 @@ pub(crate) fn api_request_started(request_id: &str, method: &'static str, change
             request_id,
             method,
             changes_ui,
+            target_pane,
+            payload_len,
+            payload_sha,
             "{message}"
         );
     }
@@ -91,14 +164,38 @@ pub(crate) fn api_request_completed(
     method: &'static str,
     outcome: &'static str,
     changes_ui: bool,
+    trace: &ApiTrace,
 ) {
     let event = "api.request.complete";
     let subsystem = "api";
     let message = "api request completed";
+    let target_pane = trace.target_field();
+    let payload_len = trace.len_field();
+    let payload_sha = trace.sha_field();
     if outcome != "ok" || (changes_ui && !is_routine_api_method(method)) {
-        tracing::info!(event, subsystem, outcome, request_id, method, "{message}");
+        tracing::info!(
+            event,
+            subsystem,
+            outcome,
+            request_id,
+            method,
+            target_pane,
+            payload_len,
+            payload_sha,
+            "{message}"
+        );
     } else {
-        tracing::debug!(event, subsystem, outcome, request_id, method, "{message}");
+        tracing::debug!(
+            event,
+            subsystem,
+            outcome,
+            request_id,
+            method,
+            target_pane,
+            payload_len,
+            payload_sha,
+            "{message}"
+        );
     }
 }
 
@@ -116,7 +213,12 @@ fn is_routine_api_method(method: &str) -> bool {
     )
 }
 
-pub(crate) fn api_request_failed(request_id: &str, method: &'static str, err: &str) {
+pub(crate) fn api_request_failed(
+    request_id: &str,
+    method: &'static str,
+    err: &str,
+    trace: &ApiTrace,
+) {
     tracing::warn!(
         event = "api.request.fail",
         subsystem = "api",
@@ -124,6 +226,9 @@ pub(crate) fn api_request_failed(request_id: &str, method: &'static str, err: &s
         request_id,
         method,
         err,
+        target_pane = trace.target_field(),
+        payload_len = trace.len_field(),
+        payload_sha = trace.sha_field(),
         "api request failed"
     );
 }

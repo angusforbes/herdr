@@ -43,6 +43,7 @@ mod modal;
 mod mouse;
 mod navigate;
 mod overlays;
+mod panel_focus;
 mod selection;
 mod settings;
 mod sidebar;
@@ -80,7 +81,7 @@ impl App {
         &mut self,
         key: TerminalKey,
     ) -> Option<super::TerminalInputTarget> {
-        if self.state.popup_pane.is_some() {
+        if self.state.popup_pane.is_some() || self.panel_arrow_targets_terminal(&key) {
             return self.handle_terminal_key(key).await;
         }
         let key_event = key.as_key_event();
@@ -239,6 +240,7 @@ impl App {
                 true
             }
             Mode::SearchPane => {
+                self.cancel_ai_search();
                 self.state.search_pane_insert_text(text);
                 true
             }

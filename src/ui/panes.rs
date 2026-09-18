@@ -886,8 +886,16 @@ fn render_search_jump_highlight(
             let cell = &mut buf[(info.inner_rect.x + col, y)];
             cell.set_style(cell.style().patch(line_style));
         }
-        let start_col = if absolute_row == m.start.row { m.start.col } else { 0 };
-        let end_col = if absolute_row == m.end.row { m.end.col } else { width - 1 };
+        let start_col = if absolute_row == m.start.row {
+            m.start.col
+        } else {
+            0
+        };
+        let end_col = if absolute_row == m.end.row {
+            m.end.col
+        } else {
+            width - 1
+        };
         for col in start_col..=end_col.min(width - 1) {
             buf[(info.inner_rect.x + col, y)].set_style(match_style);
         }
@@ -897,7 +905,11 @@ fn render_search_jump_highlight(
     let marker = &mut buf[(info.inner_rect.x, y)];
     if m.start.col > 0 {
         marker.set_symbol("▶");
-        marker.set_style(Style::default().fg(app.palette.accent).add_modifier(Modifier::BOLD));
+        marker.set_style(
+            Style::default()
+                .fg(app.palette.accent)
+                .add_modifier(Modifier::BOLD),
+        );
     }
 }
 
