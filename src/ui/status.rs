@@ -204,11 +204,13 @@ pub(super) fn state_icon_symbol(
         (StatusIndicatorStyle::Dots, AgentState::Idle, false) => "●",
         (StatusIndicatorStyle::Dots, AgentState::Idle, true) => "○",
         (StatusIndicatorStyle::Dots, AgentState::Unknown, _) => "·",
+        (StatusIndicatorStyle::Dots, AgentState::Awaiting, _) => "◐",
         (StatusIndicatorStyle::Symbols, AgentState::Blocked, _) => "×",
         (StatusIndicatorStyle::Symbols, AgentState::Working, _) => "●",
         (StatusIndicatorStyle::Symbols, AgentState::Idle, false) => "✓",
         (StatusIndicatorStyle::Symbols, AgentState::Idle, true) => "○",
         (StatusIndicatorStyle::Symbols, AgentState::Unknown, _) => "·",
+        (StatusIndicatorStyle::Symbols, AgentState::Awaiting, _) => "◐",
     }
 }
 
@@ -231,6 +233,7 @@ pub(super) fn state_label(state: AgentState, seen: bool) -> &'static str {
         (AgentState::Idle, false) => "done",
         (AgentState::Idle, true) => "idle",
         (AgentState::Unknown, _) => "idle",
+        (AgentState::Awaiting, _) => "awaiting",
     }
 }
 
@@ -241,6 +244,7 @@ pub(super) fn state_label_color(state: AgentState, seen: bool, p: &Palette) -> C
         (AgentState::Idle, false) => p.teal,
         (AgentState::Idle, true) => p.green,
         (AgentState::Unknown, _) => p.overlay0,
+        (AgentState::Awaiting, _) => p.blue,
     }
 }
 

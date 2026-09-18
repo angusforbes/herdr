@@ -79,6 +79,7 @@ fn pane_attention_priority(state: AgentState, seen: bool) -> u8 {
         (AgentState::Working, _) => 2,
         (AgentState::Idle, true) => 1,
         (AgentState::Unknown, _) => 0,
+        (AgentState::Awaiting, _) => 0,
     }
 }
 

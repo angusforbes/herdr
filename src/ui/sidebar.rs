@@ -1,4 +1,4 @@
-mod tokens;
+pub(crate) mod tokens;
 
 use ratatui::{
     layout::{Alignment, Rect},
@@ -220,6 +220,7 @@ pub(super) fn agent_panel_status_key(state: AgentState, seen: bool) -> &'static 
         (AgentState::Working, _) => "working",
         (AgentState::Blocked, _) => "blocked",
         (AgentState::Unknown, _) => "unknown",
+        (AgentState::Awaiting, _) => "awaiting",
     }
 }
 
@@ -275,6 +276,7 @@ fn workspace_attention_priority(state: AgentState, seen: bool) -> u8 {
         (AgentState::Working, _) => 2,
         (AgentState::Idle, true) => 1,
         (AgentState::Unknown, _) => 0,
+        (AgentState::Awaiting, _) => 0,
     }
 }
 

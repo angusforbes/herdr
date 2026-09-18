@@ -11,7 +11,10 @@ Add a section per session; don't rewrite others'.
 cargo build --release                      # or: mise x zig@0.15.2 -- cargo build --release
 cp target/release/herdr ~/.local/bin/herdr.new && mv -f ~/.local/bin/herdr.new ~/.local/bin/herdr
 herdr server live-handoff --import-exe ~/.local/bin/herdr
+herdr-reload-agents                        # /reload idle pi panes: handoff drops hook authority (room membership)
 ```
+
+Or all of the above in one go: `herdr-deploy [label]` (~/.local/bin; `--no-build`, `--no-reload`).
 
 - Plain `cp` over the running binary fails with "Text file busy" — use the mv.
 - Without `--import-exe` the server re-execs its own now-deleted path and the handoff fails.
@@ -301,3 +304,80 @@ Angus explicitly requested a fresh introduction EVERY reload. Fresh TS captures 
 ### Navigator chosen names (pending approval)
 
 Ctrl+Space g navigator now prefers published name metadata, then chosen agent_name, renders Name · public pane ID, keeps prior title in secondary text and search. No live detector requirement, so stopped-agent pane metadata identifies revival targets. Single regression covers stopped name/search/ID and name clearing; all29 navigator tests pass. Existing render-scale harness passes: 1->15 panes median background338->351us (1.04x), active341->398us (1.17x), room328->340us (1.04x). This general harness is not a navigator-specific before/after benchmark. No persistence/identity changes. Not committed/deployed; bundle with already-installed every-reload TS update if approved.
+
+### Room greeting: named-only, and icon restored in the greeting body (Torque, 2026-09-18)
+
+Two changes to `integrations/room/pi/index.ts` (deployed copy `~/.pi/agent/extensions/herdr-room/index.ts` kept byte-identical; verify with `diff -q`).
+
+**1. Never greet as an unnamed agent.** The every-reload introduction previously fell back to
+`"Hi, I'm here. I'll introduce myself once I've chosen a name."` when no name was published. Angus
+saw that placeholder in the room and wanted no greeting at all until an identity exists. The
+fallback is removed: if `member.name` is missing, equals the pane id, or equals the agent label, the
+registration wrapper returns without posting. Named introductions are unchanged (still every
+lifecycle/reload, no model turn, no `arrival:true` dedup). New test in `integrations/room/test_post.mjs`:
+`unnamed startup does not post a placeholder introduction` asserts the method sequence is exactly
+`room.get, room.delivery.register` with zero `room.agent.post`.
+
+**2. Greeting body leads with the published icon.** `chosen_name()` in `src/room.rs` deliberately
+strips a leading non-alphanumeric prefix, so a sidebar name `🔧 Torque` reaches the room as
+`Torque` — correct for headers and `@mention` matching, but it meant the greeting read
+`Hi, I'm Torque.` with the icon lost. The extension now recovers the icon from the state file
+`herdr-name` already writes (`${XDG_STATE_HOME:-$HOME/.local/state}/herdr-names/<pane with : as _>.args`,
+first line = display string), strips `{#rrggbb}` markup, and takes the first whitespace-separated
+token only if it contains no letters/digits. Greeting becomes `Hi, I'm 🔧 Torque.`
+Verified extraction against live state: `🔧 Torque`, `⌕ Sift`, `🗝 Keystone`.
+
+Implementation note: the icon helper uses `process.getBuiltinModule?.("node:fs")` rather than a
+top-level import. `test_post.mjs` strips imports and injects a fake `process` (env only), so the
+optional call yields `undefined`, the helper returns `""`, and the existing
+`assert.equal(posts[0].params.text, "Hi, I'm Ada.")` assertions stay valid with no harness change.
+
+Verification: `node --test integrations/room/test_post.mjs` → 9/9 pass. Docs updated in
+`docs/next/rooms-prototype.md` (unnamed agents post nothing). Not committed; no server handoff
+needed (TS entrypoint only, picked up by `/reload`).
+
+Related board discussion: `~/Obsidian/Agent Message Board/machine-lore/2026-09-18.md` and
+`ideas-worth-pursuing/2026-09-18.md` (Torque). The `/name`↔`herdr-name` bridge that produces these
+names is a pi extension outside this repo: `~/.pi/agent/extensions/name-sync.ts`, documented in
+`~/.pi/agent/notes/agent-naming-lessons.md`.
+
+### Customization checkpoint (Torque, 2026-09-18)
+
+Angus requested a local Git checkpoint of all current Herdr customizations.
+This captures the room mentions/recipient API, named-only icon-bearing greetings,
+room peer-consultation wording, compact tab styling, and the new Awaiting state.
+Earlier customization commits remain in the branch history. No push, deployment,
+server handoff, or restart is part of this checkpoint.
+
+Validation at checkpoint:
+- `cargo fmt --check`: passes after formatting the new completion-transition match.
+- `just check` (using installed just 1.58.0 directly): blocked in Clippy, including
+  unused `leading_mentions`, needless lifetimes, newer chunk/byte-string/filter
+  lints, test initializer style, and items after a test module. Later recipe
+  stages were not reached. These are not waived or claimed fixed.
+- `cargo test -- --test-threads=1`: 3383 passed, 3 failed, 1 ignored. Failures:
+  `server::headless::tests::retained_pty_update_matches_full_render_frame`,
+  `server::headless::tests::retained_pty_update_streams_cursor_only_change`, and
+  `workspace::tests::generated_workspace_ids_are_short_base32_handles`.
+  The first two report foreground-colour mismatches. Attribution to earlier
+  changes versus the current changes has NOT been established.
+- Pi state-reporter Bun tests: 16/16 passed.
+- Room post/receiver Node tests: 29/29 passed.
+
+This is a recoverable development checkpoint, not a green release candidate.
+Remaining Awaiting work: review the mobile summary (it currently uses the
+Awaiting glyph for the combined working count), add direct Rust sound/glyph
+regressions, check CLI string parsing as well as accepted-value lists, and
+verify child tracking across reloads/queued agents/workflows. The current Set
+only learns starts observed during this extension lifetime.
+
+Source contains Pi integration v9 reporting `awaiting` with glyph `◐`; the live
+installed Pi reporter intentionally remains the tested v8-compatible version
+reporting `working` while children run. Do not deploy v9 ahead of a server that
+accepts Awaiting. Live single-child and staggered-child tests confirmed the
+working-state workaround; Angus confirmed the completion chime. The distinct
+Awaiting state has not been deployed or live-tested.
+
+Machine-local changes such as `~/.pi/agent/extensions/name-sync.ts`, global
+AGENTS.md, and deployment helpers outside this repository are NOT captured by
+this commit. They need a separate configuration backup if desired.

@@ -1399,10 +1399,10 @@ mod tests {
     fn clicking_tab_scroll_button_reveals_hidden_tabs_without_renaming() {
         let mut app = app_for_mouse_test();
         let mut ws = Workspace::test_new("test");
-        ws.test_add_tab(Some("logs"));
-        ws.test_add_tab(Some("review"));
-        ws.test_add_tab(Some("ops"));
-        ws.test_add_tab(Some("notes"));
+        ws.test_add_tab(Some("logs-follower"));
+        ws.test_add_tab(Some("review-queue"));
+        ws.test_add_tab(Some("ops-runbook"));
+        ws.test_add_tab(Some("notes-scratch"));
         app.state.workspaces = vec![ws];
         app.state.active = Some(0);
         app.state.selected = 0;
@@ -1424,7 +1424,7 @@ mod tests {
         assert!(app.state.workspaces[0].tabs[0].custom_name.is_none());
         assert_eq!(
             app.state.workspaces[0].tabs[1].custom_name.as_deref(),
-            Some("logs")
+            Some("logs-follower")
         );
     }
 
@@ -1433,7 +1433,14 @@ mod tests {
         let mut app = app_for_mouse_test();
         let mut ws = Workspace::test_new("test");
         for name in [
-            "one", "two", "three", "four", "five", "six", "seven", "eight",
+            "one-long",
+            "two-long",
+            "three-long",
+            "four-long",
+            "five-long",
+            "six-long",
+            "seven-long",
+            "eight-long",
         ] {
             ws.test_add_tab(Some(name));
         }

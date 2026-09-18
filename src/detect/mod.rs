@@ -17,6 +17,8 @@ pub enum AgentState {
     Blocked,
     /// Plain shell or unrecognized program.
     Unknown,
+    /// Agent's own turn is over but background subagents are still running.
+    Awaiting,
 }
 
 /// Screen-derived agent state plus confidence metadata used for source arbitration.

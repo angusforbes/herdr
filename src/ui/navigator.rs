@@ -529,6 +529,7 @@ fn display_state(state: crate::detect::AgentState, seen: bool) -> &'static str {
         (crate::detect::AgentState::Idle, false) => "done",
         (crate::detect::AgentState::Idle, true) => "idle",
         (crate::detect::AgentState::Unknown, _) => "unknown",
+        (crate::detect::AgentState::Awaiting, _) => "awaiting",
     }
 }
 

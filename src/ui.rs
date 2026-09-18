@@ -17,7 +17,7 @@ mod room;
 mod scrollbar;
 mod search_pane;
 mod settings;
-mod sidebar;
+pub(crate) mod sidebar;
 mod status;
 mod tab_surface;
 mod tabs;

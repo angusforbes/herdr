@@ -46,6 +46,7 @@ fn post(app: &mut App, recipient: Option<&Member>) -> ResponseResult {
                 terminal_id: m.terminal_id.clone(),
                 session: m.session.clone().unwrap(),
             }),
+            recipients: None,
         }),
     )
 }
@@ -482,6 +483,7 @@ async fn room_delivery_api_targeted_slot_report_and_current_session_revalidation
                 terminal_id: member.terminal_id,
                 session: member.session.unwrap(),
             }),
+            recipients: None,
         }),
     );
     assert!(post_error.contains("invalid_recipient"));
@@ -634,5 +636,79 @@ async fn room_delivery_composer_none_broadcasts_and_shows_real_status() {
     assert_eq!(
         app.state.workspaces[0].room.messages[0].recipients,
         vec![member]
+    );
+}
+
+#[tokio::test]
+async fn room_ui_leading_mentions_address_only_named_members_and_reject_unknown() {
+    let mut app = app();
+    identify(&mut app, "ada");
+    app.state.select_room();
+    let ada = crate::room::members(&app.state, 0).pop().unwrap();
+    let bob = add_member(&mut app, crate::detect::Agent::Pi, Some("/tmp/bob-mention"));
+    let receivers = [register(&mut app, &ada), register(&mut app, &bob)];
+    app.refresh_room_members();
+    let before = app.state.workspaces[0].room.messages.len();
+
+    // Unknown mention: nothing saved, nothing delivered, draft kept, status explains.
+    app.state.insert_room_text("@Nobody are you there?");
+    app.handle_room_key(&TerminalKey::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.state.workspaces[0].room.messages.len(), before);
+    assert!(
+        app.state.room_ui.status.contains("@Nobody"),
+        "{}",
+        app.state.room_ui.status
+    );
+    for receiver in &receivers {
+        assert!(claim(&mut app, receiver, true).is_none());
+    }
+    app.state
+        .room_ui
+        .editor
+        .sent(&mut app.state.room_ui.composer);
+
+    // Addressed by pane id: only bob is a recipient; ada is not delivered to.
+    let text = format!("@{} just you", bob.pane_id);
+    app.state.insert_room_text(&text);
+    app.handle_room_key(&TerminalKey::new(KeyCode::Enter, KeyModifiers::NONE));
+    let message = app.state.workspaces[0].room.messages.last().unwrap();
+    assert_eq!(message.text, text, "mentions stay in the transcript text");
+    assert!(message.recipient.is_none());
+    assert_eq!(message.recipients, vec![bob.clone()]);
+    assert!(
+        claim(&mut app, &receivers[0], true).is_none(),
+        "ada not addressed"
+    );
+    let job = claim(&mut app, &receivers[1], true).unwrap();
+    assert_eq!(job.text, text);
+    reply(&mut app, &job);
+
+    // API: explicit recipients list is validated as a whole.
+    let workspace_id = app.state.workspaces[0].id.clone();
+    let stale = RoomRecipient {
+        pane_id: bob.pane_id.clone(),
+        terminal_id: bob.terminal_id.clone(),
+        session: "Path:/tmp/not-bob".into(),
+    };
+    let error = app.dispatch_api_request(
+        "t",
+        Method::RoomPost(RoomPostParams {
+            workspace_id,
+            text: "mixed".into(),
+            recipient: None,
+            recipients: Some(vec![
+                RoomRecipient {
+                    pane_id: ada.pane_id.clone(),
+                    terminal_id: ada.terminal_id.clone(),
+                    session: ada.session.clone().unwrap(),
+                },
+                stale,
+            ]),
+        }),
+    );
+    assert!(error.contains("invalid_recipient"), "{error}");
+    assert!(
+        claim(&mut app, &receivers[0], true).is_none(),
+        "rejected posts deliver nothing"
     );
 }

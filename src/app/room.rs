@@ -1,5 +1,6 @@
 //! Room client presentation and input; shared facts are in Workspace::room.
 pub(crate) mod editor;
+pub(crate) mod mentions;
 pub(crate) mod selection;
 #[cfg(test)]
 mod tests;
@@ -332,21 +333,32 @@ impl App {
         let Some(index) = self.state.active else {
             return;
         };
-        // UI posts are always group questions, even with an old presentation
-        // target still present. Explicit targeting remains a neutral API feature.
+        // UI posts are group questions unless the text starts with `@Name` mentions
+        // (Angus, 2026-09-17): then only those current members are addressed. The
+        // legacy presentation target is never used as a delivery target.
         self.state.room_ui.recipient = None;
+        let text = self
+            .state
+            .room_ui
+            .editor
+            .expanded(&self.state.room_ui.composer)
+            .trim()
+            .to_owned();
+        let recipients = match mentions::resolve(&text, &self.state.room_ui.members) {
+            Ok(list) => list,
+            Err(message) => {
+                // Keep the draft; nothing was sent.
+                self.state.room_ui.status = message;
+                return;
+            }
+        };
         let response = self.dispatch_api_request(
             "room.composer",
             crate::api::schema::Method::RoomPost(crate::api::schema::RoomPostParams {
                 workspace_id: self.state.workspaces[index].id.clone(),
-                text: self
-                    .state
-                    .room_ui
-                    .editor
-                    .expanded(&self.state.room_ui.composer)
-                    .trim()
-                    .to_owned(),
+                text,
                 recipient: None,
+                recipients,
             }),
         );
         match serde_json::from_str::<crate::api::schema::SuccessResponse>(&response) {

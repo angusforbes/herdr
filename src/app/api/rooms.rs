@@ -77,6 +77,49 @@ impl App {
             return encode_error(id, "workspace_not_found", "unknown workspace".into());
         };
         let members = crate::room::members(&self.state, index);
+        let find = |members: &[crate::room::Member], target: &RoomRecipient| {
+            members
+                .iter()
+                .find(|m| {
+                    m.pane_id == target.pane_id
+                        && m.terminal_id == target.terminal_id
+                        && m.session.as_deref() == Some(target.session.as_str())
+                })
+                .cloned()
+        };
+        if let Some(list) = params.recipients.filter(|list| !list.is_empty()) {
+            // Addressed group question: every named recipient must be a current member.
+            let mut targets = Vec::with_capacity(list.len());
+            for target in &list {
+                match find(&members, target) {
+                    Some(member) => targets.push(member),
+                    None => {
+                        return encode_error(
+                            id,
+                            "invalid_recipient",
+                            format!("{} is not a current room member", target.pane_id),
+                        )
+                    }
+                }
+            }
+            let mut seen = std::collections::HashSet::new();
+            targets.retain(|m| seen.insert((m.terminal_id.clone(), m.session.clone())));
+            if let Err(error) = self.room_delivery.check_capacity(targets.len()) {
+                return encode_error(id, "room_delivery_full", error);
+            }
+            let mut candidate = self.state.workspaces[index].room.clone();
+            return match candidate.post_to(params.text, targets.clone(), timestamp) {
+                Ok(sequence) => self.finish_room_post_with(
+                    id,
+                    index,
+                    candidate,
+                    sequence,
+                    targets,
+                    crate::persist::save_checked,
+                ),
+                Err(error) => encode_error(id, "invalid_room_post", error),
+            };
+        }
         let targeted = params.recipient.is_some();
         let mut targets = match params.recipient {
             Some(target) => match members.into_iter().find(|m| {

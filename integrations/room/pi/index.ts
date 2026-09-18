@@ -15,6 +15,25 @@ export default function (pi: ExtensionAPI) {
     && env.HERDR_SOCKET_PATH?.startsWith("/") === true
     && typeof env.HERDR_PANE_ID === "string" && env.HERDR_PANE_ID.length > 0
     ? "1" : "0";
+  // The server strips a decorative icon prefix from the canonical room name
+  // (see chosen_name in src/room.rs), so member.name is bare. Recover the icon
+  // the agent published via herdr-name so the greeting body can lead with it.
+  // Uses process.getBuiltinModule (no import) so the mjs test harness — which
+  // injects a fake `process` without it — simply gets no icon and stays green.
+  const decorativeIcon = (paneId?: string): string => {
+    try {
+      const fs = (process as any).getBuiltinModule?.("node:fs");
+      if (!fs || !paneId) return "";
+      const base = process.env.XDG_STATE_HOME || `${process.env.HOME}/.local/state`;
+      const file = `${base}/herdr-names/${paneId.replace(/:/g, "_")}.args`;
+      const first = (fs.readFileSync(file, "utf8").split("\n")[0] ?? "").trim();
+      const plain = first.replace(/\{#?[0-9a-fA-F]{0,6}\}/g, "").trim();
+      const m = plain.match(/^(\S+)\s+(.+)$/);
+      return m && !/[\p{L}\p{N}]/u.test(m[1]) && m[2].trim() ? m[1] : "";
+    } catch {
+      return "";
+    }
+  };
   const context = contextualRoomTransport(pi);
   // Keep arrival policy in this fresh TS closure: both native adapters may
   // already be cached in a Pi upgraded through /reload. This runs inside the
@@ -36,8 +55,11 @@ export default function (pi: ExtensionAPI) {
           const known = introductionNames.get(g);
           const member = known?.workspace === params.workspace_id && known.member.terminal_id === params.terminal_id ? known.member : undefined;
           const name = member?.name?.trim();
-          const text = name && name !== member.pane_id && name.toLowerCase() !== member.agent?.toLowerCase()
-            ? `Hi, I'm ${name}.` : "Hi, I'm here. I'll introduce myself once I've chosen a name.";
+          // Never announce an unnamed agent. The model chooses and publishes
+          // its identity first, then posts the named introduction itself.
+          if (!name || name === member.pane_id || name.toLowerCase() === member.agent?.toLowerCase()) return result;
+          const icon = decorativeIcon(params.pane_id);
+          const text = `Hi, I'm ${icon ? `${icon} ${name}` : name}.`;
           const ack = await context.call(socket, "room.agent.post", {
             workspace_id: params.workspace_id, pane_id: params.pane_id,
             terminal_id: params.terminal_id, session: params.session,

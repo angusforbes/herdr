@@ -24,7 +24,10 @@ use super::state::{
 
 fn is_background_completion_transition(prev_state: AgentState, new_state: AgentState) -> bool {
     matches!(new_state, AgentState::Idle)
-        && matches!(prev_state, AgentState::Working | AgentState::Blocked)
+        && matches!(
+            prev_state,
+            AgentState::Working | AgentState::Blocked | AgentState::Awaiting
+        )
 }
 
 fn is_completion_transition(change: &EffectiveStateChange) -> bool {
@@ -929,6 +932,7 @@ fn state_label_text(state: AgentState, seen: bool) -> &'static str {
         (AgentState::Idle, false) => "done",
         (AgentState::Idle, true) => "idle",
         (AgentState::Unknown, _) => "unknown",
+        (AgentState::Awaiting, _) => "awaiting",
     }
 }
 
@@ -959,6 +963,7 @@ fn state_priority(state: AgentState, seen: bool) -> u8 {
         (AgentState::Working, _) => 4,
         (AgentState::Idle, false) => 3,
         (AgentState::Idle, true) => 2,
+        (AgentState::Awaiting, _) => 1,
         (AgentState::Unknown, _) => 1,
     }
 }

@@ -996,6 +996,7 @@ fn global_agent_counts(app: &AppState) -> GlobalAgentCounts {
             (AgentState::Working, _) => counts.working += 1,
             (AgentState::Idle, true) => counts.idle += 1,
             (AgentState::Unknown, _) => {}
+            (AgentState::Awaiting, _) => counts.working += 1,
         }
     }
     counts
@@ -1053,7 +1054,7 @@ fn agent_summary_segments(
         segments.push((
             agent_summary_text(
                 indicator_style,
-                AgentState::Working,
+                AgentState::Awaiting,
                 true,
                 None,
                 counts.working,

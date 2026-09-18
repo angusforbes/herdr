@@ -315,6 +315,51 @@ test("Pi settlement preserves explicit blocked-state precedence", async () => {
   expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "idle"]);
 });
 
+test("Pi reports awaiting while background subagents run, and idles only when the last settles", async () => {
+  const requests = await startRecordingServer("pi-children");
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = true;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  expect(requestStates(requests)).toEqual(["idle", "working"]);
+
+  // Two background children spawn during the turn.
+  eventHandlers.get("subagents:started")?.({ id: "a" }, context);
+  eventHandlers.get("subagents:started")?.({ id: "b" }, context);
+
+  // The parent's own turn ends. Children still running, so the extension
+  // publishes "awaiting" (the new Rust AgentState::Awaiting variant with the
+  // ◐ glyph) rather than "idle" (which would ring the chime prematurely).
+  idle = true;
+  handlers.get("agent_settled")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["idle", "working", "awaiting"]);
+
+  // First child finishes: one still running, so stay on awaiting.
+  eventHandlers.get("subagents:completed")?.({ id: "a" }, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests)).toEqual(["idle", "working", "awaiting"]);
+
+  // A duplicate completion for an already-cleared child must not drop to idle.
+  eventHandlers.get("subagents:completed")?.({ id: "a" }, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests)).toEqual(["idle", "working", "awaiting"]);
+
+  // Last child settles (via failure, which must count too) -> Awaiting -> Idle
+  // transition rings the Done chime (is_background_completion_transition).
+  eventHandlers.get("subagents:failed")?.({ id: "b" }, context);
+  await waitFor(() => requestStates(requests).length === 4);
+  expect(requestStates(requests)).toEqual(["idle", "working", "awaiting", "idle"]);
+});
+
 test("Pi reports the session replacement source", async () => {
   const requests = await startRecordingServer("pi-session-source");
   const { handlers, pi } = createExtensionHarness();

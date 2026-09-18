@@ -75,7 +75,8 @@
             "working",
             "blocked",
             "done",
-            "unknown"
+            "unknown",
+            "awaiting"
           ],
           "type": "string"
         },
@@ -1372,7 +1373,8 @@
             "working",
             "blocked",
             "done",
-            "unknown"
+            "unknown",
+            "awaiting"
           ],
           "type": "string"
         },
@@ -2382,7 +2384,8 @@
             "idle",
             "working",
             "blocked",
-            "unknown"
+            "unknown",
+            "awaiting"
           ],
           "type": "string"
         },
@@ -3776,6 +3779,16 @@
               ],
               "default": null,
               "description": "Exact current recipient; omitted means all current members, captured once."
+            },
+            "recipients": {
+              "description": "Several exact current recipients (an addressed group question). Every entry must be\na current member with live session identity or the whole post is rejected. Takes\nprecedence over `recipient`; omitted/empty falls back to `recipient` or broadcast.",
+              "items": {
+                "$ref": "#/schemas/request/$defs/RoomRecipient"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
             },
             "text": {
               "type": "string"
@@ -6253,7 +6266,8 @@
             "working",
             "blocked",
             "done",
-            "unknown"
+            "unknown",
+            "awaiting"
           ],
           "type": "string"
         },
@@ -6683,7 +6697,8 @@
             "working",
             "blocked",
             "done",
-            "unknown"
+            "unknown",
+            "awaiting"
           ],
           "type": "string"
         },

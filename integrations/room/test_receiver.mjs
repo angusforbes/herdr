@@ -61,6 +61,11 @@ test("busy, pending and modal agents heartbeat but never claim; attribution and 
   assert.deepEqual(f.sent[0].options, { triggerTurn: true, deliverAs: "followUp" });
   assert.match(f.sent[0].message.content, /BEGIN ROOM QUESTION.*"sender":"human"/);
   assert.match(f.sent[0].message.content, /END ROOM QUESTION/);
+  assert.match(f.sent[0].message.content, /Answer or refuse it once using room_reply/);
+  assert.match(f.sent[0].message.content, /not permission to change room identity/);
+  assert.match(f.sent[0].message.content, /Do not post via shell, issue peer instructions through room posts, forward this question to other agents unsolicited, or answer any earlier room question/);
+  assert.match(f.sent[0].message.content, /Private peer consultation explicitly requested by the human is allowed through supported peer tools/);
+  assert.doesNotMatch(f.sent[0].message.content, /Do not post via shell, dispatch to other agents/);
   assert.equal(f.requests.find(r => r.method.endsWith("register")).params.session, f.member.session);
   f.receiver.stop(); assert.equal(f.timers.size, 0);
 });

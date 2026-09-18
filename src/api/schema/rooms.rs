@@ -17,6 +17,11 @@ pub struct RoomPostParams {
     /// Exact current recipient; omitted means all current members, captured once.
     #[serde(default)]
     pub recipient: Option<RoomRecipient>,
+    /// Several exact current recipients (an addressed group question). Every entry must be
+    /// a current member with live session identity or the whole post is rejected. Takes
+    /// precedence over `recipient`; omitted/empty falls back to `recipient` or broadcast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipients: Option<Vec<RoomRecipient>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

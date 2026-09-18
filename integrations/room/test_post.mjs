@@ -14,10 +14,10 @@ const Type = {
   Object: (properties, options) => ({ properties, ...options }),
   String: options => options, Integer: options => options, Optional: value => value,
 };
-function fixture({ callOverride, arrivals = new Map(), session = 'Path:/private/session', workspace = 'w1', terminal = 't1' } = {}) {
+function fixture({ callOverride, arrivals = new Map(), session = 'Path:/private/session', workspace = 'w1', terminal = 't1', name = 'Ada' } = {}) {
   const requests = [], sent = [], notices = [], handlers = new Map(), tools = new Map();
   let receiver;
-  const member = { pane_id: 'w1:p1', terminal_id: terminal, session, name: 'Ada', agent: 'pi' };
+  const member = { pane_id: 'w1:p1', terminal_id: terminal, session, name, agent: 'pi' };
   const ctx = { mode: 'tui', hasUI: true, isIdle: () => true, hasPendingMessages: () => false,
     sessionManager: { getSessionFile: () => session.startsWith('Path:') ? session.slice(5) : undefined, getSessionId: () => session.slice(3) },
     ui: { setStatus() {}, notify: text => notices.push(text) } };
@@ -64,6 +64,14 @@ test('startup posts one deterministic arrival within serialized registration wit
   assert.equal(f.requests.filter(r => r.method === 'room.agent.post').length, 1);
   assert.equal(f.sent.length, 0);
   assert.ok(f.receiver.run.receiver); assert.ok(!f.receiver.run.frozen);
+});
+
+test('unnamed startup does not post a placeholder introduction', async () => {
+  const f = fixture({ name: 'w1:p1' });
+  await f.start();
+  assert.deepEqual(f.requests.map(r => r.method), ['room.get', 'room.delivery.register']);
+  assert.equal(f.requests.filter(r => r.method === 'room.agent.post').length, 0);
+  assert.equal(f.sent.length, 0);
 });
 
 test('every reload with cached native adapters posts a fresh named introduction', async () => {

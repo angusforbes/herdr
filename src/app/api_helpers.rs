@@ -5,6 +5,7 @@ pub(super) fn tab_attention_priority(state: crate::detect::AgentState, seen: boo
         (crate::detect::AgentState::Working, _) => 2,
         (crate::detect::AgentState::Idle, true) => 1,
         (crate::detect::AgentState::Unknown, _) => 0,
+        (crate::detect::AgentState::Awaiting, _) => 0,
     }
 }
 
@@ -90,6 +91,7 @@ pub(super) fn detect_state_from_api(
         crate::api::schema::PaneAgentState::Working => crate::detect::AgentState::Working,
         crate::api::schema::PaneAgentState::Blocked => crate::detect::AgentState::Blocked,
         crate::api::schema::PaneAgentState::Unknown => crate::detect::AgentState::Unknown,
+        crate::api::schema::PaneAgentState::Awaiting => crate::detect::AgentState::Awaiting,
     }
 }
 
@@ -103,6 +105,7 @@ pub(super) fn pane_agent_status(
         (crate::detect::AgentState::Working, _) => crate::api::schema::AgentStatus::Working,
         (crate::detect::AgentState::Blocked, _) => crate::api::schema::AgentStatus::Blocked,
         (crate::detect::AgentState::Unknown, _) => crate::api::schema::AgentStatus::Unknown,
+        (crate::detect::AgentState::Awaiting, _) => crate::api::schema::AgentStatus::Awaiting,
     }
 }
 

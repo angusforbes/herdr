@@ -181,6 +181,7 @@ async fn room_api_reads_posts_replies_never_feed_pty_and_reject_duplicate() {
             terminal_id: member.terminal_id.clone(),
             session: member.session.clone().unwrap(),
         }),
+        recipients: None,
     };
     result(
         &mut app,
@@ -353,6 +354,7 @@ async fn room_api_rejects_ordinal_and_out_of_range_workspace_aliases() {
                 workspace_id: workspace_id.into(),
                 text: "note".into(),
                 recipient: None,
+                recipients: None,
             }),
             Method::RoomReply(RoomReplyParams {
                 workspace_id: workspace_id.into(),
@@ -382,6 +384,7 @@ async fn room_stable_workspace_target_survives_reordering() {
             workspace_id,
             text: "stable destination".into(),
             recipient: None,
+            recipients: None,
         }),
     );
     assert!(app.state.workspaces[0].room.messages.is_empty());

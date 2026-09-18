@@ -355,7 +355,7 @@ fn agent_command() -> Command {
                     option("until", "STATUS")
                         .action(ArgAction::Append)
                         .requires("wait")
-                        .value_parser(["idle", "working", "blocked", "done", "unknown"])
+                        .value_parser(["idle", "working", "blocked", "done", "unknown", "awaiting"])
                         .help("State to match after --wait; repeat for more than one state"),
                 )
                 .arg(
@@ -389,7 +389,7 @@ fn agent_command() -> Command {
                 .arg(
                     option("until", "STATUS")
                         .action(ArgAction::Append)
-                        .value_parser(["idle", "working", "blocked", "done", "unknown"])
+                        .value_parser(["idle", "working", "blocked", "done", "unknown", "awaiting"])
                         .help("State to match; repeat for more than one state"),
                 )
                 .arg(option("timeout", "MS").help("Fail after this many milliseconds"))
@@ -925,7 +925,7 @@ fn split_direction_option() -> Arg {
 fn pane_agent_state_option(name: &'static str) -> Arg {
     option(name, "STATUS")
         .required(true)
-        .value_parser(["idle", "working", "blocked", "unknown"])
+        .value_parser(["idle", "working", "blocked", "unknown", "awaiting"])
 }
 
 fn read_source_option(include_detection: bool) -> Arg {
@@ -1239,7 +1239,7 @@ mod tests {
         assert!(!has_option(wait, "status"));
         assert_eq!(
             option_values(wait, "until"),
-            ["idle", "working", "blocked", "done", "unknown"]
+            ["idle", "working", "blocked", "done", "unknown", "awaiting"]
         );
         assert!(has_option(wait, "timeout"));
     }

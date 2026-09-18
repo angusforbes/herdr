@@ -14,14 +14,14 @@ pub(super) struct ResolvedToken {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RichSegment {
+pub(crate) struct RichSegment {
     pub text: String,
     pub fg: Option<crate::config::SidebarTokenColor>,
 }
 
 /// Parse `{#rrggbb}text{#rgb}more{}plain` into plain text + coloured segments.
 /// `{}` resets to the token's own colour. Braces that don't form a valid tag are literal.
-pub(super) fn parse_rich_markup(value: &str) -> (String, Option<Vec<RichSegment>>) {
+pub(crate) fn parse_rich_markup(value: &str) -> (String, Option<Vec<RichSegment>>) {
     let mut plain = String::new();
     let mut segments: Vec<RichSegment> = Vec::new();
     let mut current = RichSegment {

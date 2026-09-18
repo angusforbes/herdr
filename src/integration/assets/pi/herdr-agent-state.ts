@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=8
+// HERDR_INTEGRATION_VERSION=9
 // @ts-nocheck
 
 import net from "node:net";
@@ -53,7 +53,7 @@ async function sendRequest(request: unknown): Promise<void> {
   await sendRequestAttempt(request, 1500);
 }
 
-type AgentState = "working" | "blocked" | "idle";
+type AgentState = "working" | "blocked" | "idle" | "awaiting";
 
 type QueuedState = {
   state: AgentState;
@@ -178,6 +178,11 @@ export default function (pi) {
   }
 
   let agentActive = false;
+  // Top-level background subagents still running. A parent whose turn has ended
+  // but whose children are still working is NOT idle: reporting idle there rings
+  // the completion chime early, which trains the user to distrust the chime.
+  // Tracked by id (not a counter) so a duplicated completion cannot underflow.
+  const runningChildren = new Set<string>();
   let blockedCount = 0;
   let blockedMessage: string | undefined;
   let lastState: AgentState | undefined;
@@ -191,6 +196,16 @@ export default function (pi) {
     if (agentActive) {
       return { state: "working" as const, message: undefined };
     }
+    if (runningChildren.size > 0) {
+      // Waiting on background children: the parent's turn is over but work
+      // continues, so it is not idle. The Rust AgentState::Awaiting variant
+      // (src/detect/mod.rs) maps to the ◐ glyph and rings the Done chime on
+      // Awaiting -> Idle (app/actions.rs is_background_completion_transition)
+      // exactly like Working|Blocked -> Idle does.
+      // No message: it would render as sidebar text and disturb the layout.
+      return { state: "awaiting" as const, message: undefined };
+    }
+
     return { state: "idle" as const, message: undefined };
   }
 
@@ -221,6 +236,30 @@ export default function (pi) {
     blockedMessage = data.label;
     publishState();
   });
+
+  // pi-subagents publishes top-level agent lifecycle on the shared event bus.
+  // Only agents that pass its isTopLevelAgent() check emit, so nested children
+  // and workflow stages are already excluded for us.
+  pi.events.on("subagents:started", (data) => {
+    if (!rootSession || !data?.id) {
+      return;
+    }
+    runningChildren.add(String(data.id));
+    publishState();
+  });
+
+  const childSettled = (data) => {
+    if (!rootSession || !data?.id) {
+      return;
+    }
+    if (runningChildren.delete(String(data.id))) {
+      // When the last child clears, this drops to idle and the chime finally
+      // fires at the moment it actually means "your turn".
+      publishState();
+    }
+  };
+  pi.events.on("subagents:completed", childSettled);
+  pi.events.on("subagents:failed", childSettled);
 
   pi.on("session_start", async (event, ctx) => {
     // TUI only: RPC/JSON/print modes are headless (no PTY herdr can display),

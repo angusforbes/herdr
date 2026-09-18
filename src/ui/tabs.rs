@@ -9,7 +9,9 @@ use super::text::display_width_u16;
 use super::widgets::panel_contrast_fg;
 use crate::app::AppState;
 
-const MIN_TAB_WIDTH: u16 = 8;
+// One cell of padding on each side of the label, matching the room ("Angus") tab.
+const TAB_PADDING: u16 = 2;
+const MIN_TAB_WIDTH: u16 = 1 + TAB_PADDING;
 const NEW_TAB_WIDTH: u16 = 3;
 const TAB_SCROLL_BUTTON_WIDTH: u16 = 3;
 const ZOOM_INDICATOR: &str = "ZOOM";
@@ -30,7 +32,7 @@ pub(crate) struct TabBarView {
 
 fn tab_width(ws: &crate::workspace::Workspace, tab_idx: usize) -> u16 {
     display_width_u16(&tab_chrome_label(ws, tab_idx))
-        .saturating_add(4)
+        .saturating_add(TAB_PADDING)
         .max(MIN_TAB_WIDTH)
 }
 
@@ -177,6 +179,9 @@ fn max_tab_scroll(ws: &crate::workspace::Workspace, area: Rect) -> usize {
         .unwrap_or(0)
 }
 
+/// Text shown on the room pseudo-tab at the left of every workspace's tab bar.
+pub(crate) const ROOM_TAB_LABEL: &str = "Angus";
+
 pub(crate) fn compute_tab_bar_view(
     ws: &crate::workspace::Workspace,
     area: Rect,
@@ -184,12 +189,15 @@ pub(crate) fn compute_tab_bar_view(
     follow_active: bool,
     mouse_chrome: bool,
 ) -> TabBarView {
-    let width = area.width.min(8);
+    // The room's pseudo-tab reads "Angus" (his request, 2026-09-17); internally it is still the room.
+    let width = area.width.min(ROOM_TAB_LABEL.len() as u16 + TAB_PADDING);
     let room_hit_area = Rect::new(area.x, area.y, width, area.height.min(1));
+    // Same 1-column gap after the room tab as `layout_tab_hit_areas` puts between terminal tabs.
+    let occupied = width.saturating_add(1).min(area.width);
     let terminal_area = Rect::new(
-        area.x + width,
+        area.x + occupied,
         area.y,
-        area.width.saturating_sub(width),
+        area.width.saturating_sub(occupied),
         area.height,
     );
     let mut view = compute_terminal_tab_bar_view(
@@ -364,7 +372,7 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     );
 
     frame.render_widget(
-        Paragraph::new(" room ").style(if app.room_active() {
+        Paragraph::new(format!(" {ROOM_TAB_LABEL} ")).style(if app.room_active() {
             Style::default().fg(panel_contrast_fg(p)).bg(p.accent)
         } else {
             Style::default().fg(p.overlay1).bg(p.surface0)
@@ -720,15 +728,13 @@ mod tests {
             .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
             .unwrap();
 
-        // 17 display columns + 4 padding: two columns each side, wide glyphs
+        // 17 display columns + 2 padding: one column each side, wide glyphs
         // starting right after the left padding.
         let rect = app.view.tab_hit_areas[0];
-        assert_eq!(rect.width, 21);
+        assert_eq!(rect.width, 19);
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(rect.x, rect.y)].symbol(), " ");
-        assert_eq!(buffer[(rect.x + 1, rect.y)].symbol(), " ");
-        assert_eq!(buffer[(rect.x + 2, rect.y)].symbol(), "提");
-        assert_eq!(buffer[(rect.x + rect.width - 2, rect.y)].symbol(), " ");
+        assert_eq!(buffer[(rect.x + 1, rect.y)].symbol(), "提");
         assert_eq!(buffer[(rect.x + rect.width - 1, rect.y)].symbol(), " ");
     }
 
@@ -755,7 +761,7 @@ mod tests {
         let cell: String = (rect.x..rect.x + rect.width)
             .map(|x| buffer[(x, rect.y)].symbol())
             .collect();
-        assert_eq!(cell, "  omarchy  ");
+        assert_eq!(cell, " omarchy ");
     }
 
     #[test]
@@ -789,7 +795,7 @@ mod tests {
         ws.tabs[0].set_custom_name("abcdefgh".into());
         ws.tabs[0].zoomed = true;
 
-        assert_eq!(tab_width(&ws, 0), 14);
+        assert_eq!(tab_width(&ws, 0), 10 + TAB_PADDING);
     }
 
     #[test]
@@ -799,7 +805,7 @@ mod tests {
 
         assert_eq!(
             tab_width(&ws, 0),
-            display_width_u16("提交 herdr 的反馈") + 4
+            display_width_u16("提交 herdr 的反馈") + TAB_PADDING
         );
     }
 
