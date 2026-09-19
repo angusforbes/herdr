@@ -72,6 +72,12 @@ Success for a write includes `sequence`, `persistence`, `queued`, `unavailable` 
 
 ### Automatic Pi room membership and commands
 
+For an opt-in setup including the state reporter, room receiver, naming bridge
+and helper, see [the fork's Pi setup](../../integrations/pi-customizations/README.md).
+The standard `herdr integration install pi` command alone does not install the
+room receiver or naming bridge. Setup defaults to a no-write plan and refuses
+to overwrite differing existing files; it does not reload running agents.
+
 The extension registers `/room-enable`, `/room-disable`, `room_read`, `room_post` and `room_reply`. Pi TUIs automatically connect when launched/reloaded with an exact absolute `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`. Outside Herdr, or with `HERDR_ROOM_ENABLED=0`, the receiver starts inactive and opens no sockets/timers. `room_reply` requires a matching active delivery. `room_post {text}` needs only a valid current binding; it captures socket/workspace/pane/terminal/session from the receiver, not model arguments. Posts accept 1–8192 UTF-8 bytes of nonblank text, use the receiver's serialized RPC queue and report success only on a persisted acknowledgement. They do not end unrelated work. Ambiguous writes are never automatically retried; inspect `room_read` instead.
 
 For an already-running Pi:

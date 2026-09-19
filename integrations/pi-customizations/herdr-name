@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Announce an agent's self-chosen name to the Herdr sidebar ($name token, line 2).
+#
+#   herdr-name <Name> [--fg '#rrggbb'] [--bold] [--italic] [--dim]   # this pane ($HERDR_PANE_ID)
+#   herdr-name --pane <id> <Name> [style...]                          # any pane, e.g. --pane w4:p5
+#   herdr-name --clear [--pane <id>]
+#   herdr-name --list                                                 # agent panes, with/without names
+#
+#   herdr-name --republish                                            # re-send saved names (after a Herdr server restart)
+#
+# No TTL under a normal server, BUT a Herdr server restart/handoff drops report-metadata
+# tokens. So every call is saved to ~/.local/state/herdr-names/<pane>.args and
+# `herdr-name --republish` (run by herdr-name-keeper.service) re-sends them.
+set -euo pipefail
+state="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-names"; mkdir -p "$state"
+if [[ "${1:-}" == "--republish" ]]; then
+  herdr pane list 2>/dev/null | python3 -c "$(cat <<'PY'
+import json,sys,os,glob
+state=sys.argv[1]
+panes={p["pane_id"]:p for p in json.load(sys.stdin)["result"]["panes"]}
+for f in glob.glob(os.path.join(state,"*.args")):
+    pid=os.path.basename(f)[:-5].replace("_",":")
+    if pid not in panes: os.remove(f); continue          # pane gone
+    if "name" in panes[pid].get("tokens",{}): continue   # still shown
+    print(pid)
+PY
+)" "$state" | while IFS= read -r pid; do
+    f="$state/${pid//:/_}.args"; [[ -e "$f" ]] || continue
+    mapfile -t a < "$f"; HERDR_PANE_ID="$pid" "$0" "${a[@]}" || true
+  done
+  exit 0
+fi
+src="herdr:agentname"
+pane="${HERDR_PANE_ID:-}"
+
+if [[ "${1:-}" == "--list" ]]; then
+  herdr agent list | python3 -c '
+import json,sys
+for a in json.load(sys.stdin)["result"]["agents"]:
+    t = a.get("tokens", {})
+    print("%-8s %-18s %-12s %s" % (a["pane_id"], t.get("model", a.get("agent", "")), t.get("name", "-"), t.get("topic", "")))'
+  exit 0
+fi
+if [[ "${1:-}" == "--pane" ]]; then pane="${2:?--pane needs an id}"; shift 2; fi
+if [[ -z "$pane" ]]; then echo "herdr-name: no pane (not inside Herdr and no --pane given)" >&2; exit 1; fi
+seq="$(date +%s%N)"
+clears=(--clear-token name_fg --clear-token name_bold --clear-token name_italic --clear-token name_dim)
+
+if [[ "${1:-}" == "--clear" ]]; then
+  shift; if [[ "${1:-}" == "--pane" ]]; then pane="${2:?}"; fi
+  rm -f "$state/${pane//:/_}.args"
+  exec herdr pane report-metadata "$pane" --source "$src" --seq "$seq" --clear-token name "${clears[@]}"
+fi
+# save the invocation for --republish (before we exec)
+printf '%s\n' "$@" > "$state/${pane//:/_}.args"
+name="${1:?usage: herdr-name [--pane id] <Name> [--fg '#rrggbb'] [--bold] [--italic] [--dim]}"; shift
+args=(--token "name=$name" "${clears[@]}")
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --pane) pane="$2"; shift 2 ;;
+    --fg) args+=(--token "name_fg=$2"); shift 2 ;;
+    --bold) args+=(--token "name_bold=true"); shift ;;
+    --italic) args+=(--token "name_italic=true"); shift ;;
+    --dim) args+=(--token "name_dim=true"); shift ;;
+    *) echo "herdr-name: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+# Also label the pane's tab with the bare name (Angus, 2026-09-17: agent names as tab labels by default).
+# Skipped when the tab holds several panes, or with HERDR_NAME_NO_TAB=1.
+if [[ -z "${HERDR_NAME_NO_TAB:-}" ]]; then
+  tab_info="$(herdr pane get "$pane" 2>/dev/null | python3 -c 'import json,sys
+p=json.load(sys.stdin)["result"]["pane"]; print(p.get("tab_id",""))' 2>/dev/null || true)"
+  if [[ -n "$tab_info" ]]; then
+    count="$(herdr tab get "$tab_info" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["tab"].get("pane_count",1))' 2>/dev/null || echo 1)"
+    if [[ "$count" == "1" ]]; then
+      bare="$(sed -E 's/\{#[0-9a-fA-F]{6}\}//g; s/^[^A-Za-z0-9]*//; s/[^A-Za-z0-9]*$//' <<<"$name")"
+      [[ -n "$bare" ]] && herdr tab rename "$tab_info" "$bare" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+exec herdr pane report-metadata "$pane" --source "$src" --seq "$seq" "${args[@]}"
