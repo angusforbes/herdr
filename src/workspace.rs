@@ -1535,13 +1535,45 @@ mod tests {
         let first = generate_workspace_id();
         let second = generate_workspace_id();
 
-        assert!(first.starts_with('w'));
-        assert!(second.starts_with('w'));
-        assert_ne!(first, second);
-        assert!(first.len() <= 3, "unexpectedly long workspace id: {first}");
+        // Must start with the 'w' prefix.
         assert!(
-            second.len() <= 3,
-            "unexpectedly long workspace id: {second}"
+            first.starts_with('w'),
+            "workspace id must start with 'w': {first}"
+        );
+        assert!(
+            second.starts_with('w'),
+            "workspace id must start with 'w': {second}"
+        );
+
+        // Must be unique.
+        assert_ne!(first, second);
+
+        // The numeric part must round-trip through encode/decode.
+        let first_num = decode_public_number(first.strip_prefix('w').unwrap())
+            .unwrap_or_else(|| panic!("workspace id numeric part must decode: {first}"));
+        let second_num = decode_public_number(second.strip_prefix('w').unwrap())
+            .unwrap_or_else(|| panic!("workspace id numeric part must decode: {second}"));
+        assert_eq!(
+            format!("w{}", encode_public_number(first_num)),
+            first,
+            "workspace id must round-trip through encode/decode"
+        );
+        assert_eq!(
+            format!("w{}", encode_public_number(second_num)),
+            second,
+            "workspace id must round-trip through encode/decode"
+        );
+
+        // Must be compact: the 'w' prefix plus up to 13 base-32 digits covers the
+        // entire u64/usize counter range.  Early in a fresh installation the IDs will
+        // be 2-3 chars; the upper bound guards against pathological encoding bugs.
+        assert!(
+            first.len() <= 14,
+            "workspace id exceeds maximum length for u64 counter range: {first}"
+        );
+        assert!(
+            second.len() <= 14,
+            "workspace id exceeds maximum length for u64 counter range: {second}"
         );
     }
 

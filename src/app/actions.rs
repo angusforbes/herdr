@@ -2990,6 +2990,7 @@ impl AppState {
             AppEvent::TabBarCommandFinished { .. } => Vec::new(),
             AppEvent::PluginCommandFinished { .. } => Vec::new(),
             AppEvent::SearchPaneAiFinished { .. } => Vec::new(),
+            AppEvent::ConversationLaunchRetry { .. } => Vec::new(),
         }
     }
 
@@ -5224,6 +5225,35 @@ mod tests {
         assert_eq!(
             notification_sound_for_state_change(false, AgentState::Unknown, AgentState::Idle),
             None
+        );
+    }
+
+    #[test]
+    fn awaiting_is_silent_until_background_completion() {
+        use crate::sound::Sound;
+        assert_eq!(
+            notification_sound_for_state_change(false, AgentState::Working, AgentState::Awaiting),
+            None
+        );
+        assert_eq!(
+            notification_sound_for_state_change(false, AgentState::Awaiting, AgentState::Awaiting),
+            None
+        );
+        assert_eq!(
+            notification_sound_for_state_change(false, AgentState::Awaiting, AgentState::Working),
+            None
+        );
+        assert_eq!(
+            notification_sound_for_state_change(false, AgentState::Awaiting, AgentState::Idle),
+            Some(Sound::Done)
+        );
+        assert_eq!(
+            notification_sound_for_state_change(true, AgentState::Awaiting, AgentState::Idle),
+            None
+        );
+        assert_eq!(
+            crate::app::api_helpers::tab_attention_priority(AgentState::Awaiting, false),
+            0
         );
     }
 

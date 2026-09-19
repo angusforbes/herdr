@@ -96,12 +96,19 @@ fn spawn_server_with_path(
     api_socket_path: &Path,
     path_override: Option<&Path>,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    let app_dir = if cfg!(debug_assertions) {
+        "herdr-dev"
+    } else {
+        "herdr"
+    };
+    fs::create_dir_all(config_home.join(app_dir)).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("herdr/config.toml"),
-        "onboarding = false\n",
+        config_home.join(app_dir).join("config.toml"),
+        // Distinct glyphs let cross-area tests verify semantic state changes
+        // while workspace colours remain stable across those transitions.
+        "[ui]\nstatus_indicators = \"symbols\"\n",
     )
     .unwrap();
 
@@ -548,6 +555,37 @@ fn decode_frame_payload(payload: &[u8]) -> io::Result<FrameWire> {
         })
 }
 
+/// Compute the workspace palette colour for a workspace ID string.
+///
+/// Mirrors `AppState::workspace_color` so that tests can predict the correct
+/// colour from the API-returned workspace id rather than hard-coding a constant.
+fn workspace_palette_color(workspace_id: &str) -> (u8, u8, u8) {
+    const PALETTE: [(u8, u8, u8); 8] = [
+        (0x7a, 0xa2, 0xf7), // blue
+        (0x9e, 0xce, 0x6a), // green
+        (0xe0, 0xaf, 0x68), // amber
+        (0xf7, 0x76, 0x8e), // rose
+        (0xbb, 0x9a, 0xf7), // violet
+        (0x7d, 0xcf, 0xff), // sky
+        (0xff, 0x9e, 0x64), // orange
+        (0x73, 0xda, 0xca), // teal
+    ];
+    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKMNPQRSTVWXYZ0";
+    let seed = workspace_id
+        .strip_prefix('w')
+        .and_then(|s| {
+            let mut n = 0usize;
+            for ch in s.chars() {
+                let d = ALPHABET.iter().position(|&c| c == ch as u8)?;
+                n = n.checked_mul(ALPHABET.len())?.checked_add(d + 1)?;
+            }
+            Some(n)
+        })
+        .map(|n| n.saturating_sub(1))
+        .unwrap_or_else(|| workspace_id.bytes().map(usize::from).sum::<usize>());
+    PALETTE[seed % PALETTE.len()]
+}
+
 fn frame_contains_colored_symbol(frame: &FrameWire, symbol: &str, rgb: (u8, u8, u8)) -> bool {
     let (r, g, b) = rgb;
     let fg = 0x02_00_00_00 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
@@ -793,10 +831,17 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     assert!(wait_for_frame(&mut client_a, Duration::from_secs(2)));
 
     let created = workspace_create(&api_socket, "agent-persist");
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .expect("workspace id")
+        .to_string();
     let pane_id = created["result"]["root_pane"]["pane_id"]
         .as_str()
         .expect("root pane id")
         .to_string();
+    // Derive the expected agent-icon colour from the workspace id.  Agent state icons
+    // are tinted with the workspace palette colour, not the semantic state colour.
+    let agent_icon_color = workspace_palette_color(&workspace_id);
 
     // Ensure detected agent surface is populated by running fake `pi`.
     pane_send_text(&api_socket, &pane_id, "pi");
@@ -841,35 +886,36 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     );
 
     // Reattach and ensure client-side state reflects the persisted working status.
+    // Agent state icons are coloured with the workspace palette colour (not the semantic
+    // state colour), so we use the colour computed from the workspace id above.
     let mut client_b = UnixStream::connect(&client_socket).expect("client B should connect");
     client_handshake(&mut client_b, CURRENT_PROTOCOL, 80, 24);
     let saw_working_on_client =
         wait_for_frame_matching(&mut client_b, Duration::from_secs(5), |frame| {
-            frame_contains_colored_symbol(frame, "●", (249, 226, 175))
+            frame_contains_colored_symbol(frame, "●", agent_icon_color)
         })
         .expect("frame decoding should succeed");
     assert!(
         saw_working_on_client,
-        "reattached client frame should expose persisted agent working status"
+        "reattached client frame should expose persisted agent working status (workspace colour {:?})",
+        agent_icon_color
     );
 
-    // Transition to blocked and verify API + client surfaces both observe it.
-    // The fake process remains visibly working, so blocked is the deterministic
-    // higher-priority semantic transition for this cross-area projection test.
+    // Transition to blocked and verify both API and client surfaces observe it.
+    // Symbols mode distinguishes the states without overriding workspace colour.
     pane_report_agent(&api_socket, &pane_id, "pi", "blocked", "cross-area-test");
     assert!(
         wait_for_agent_status(&api_socket, &pane_id, "blocked", Duration::from_secs(3)),
         "pane agent status should transition to blocked"
     );
-
     let saw_blocked_on_client =
         wait_for_frame_matching(&mut client_b, Duration::from_secs(5), |frame| {
-            frame_contains_colored_symbol(frame, "●", (243, 139, 168))
+            frame_contains_colored_symbol(frame, "×", agent_icon_color)
         })
         .expect("frame decoding should succeed");
     assert!(
         saw_blocked_on_client,
-        "reattached client frame should show blocked status after transition"
+        "reattached client must render blocked status"
     );
 
     cleanup_spawned_herdr(server, base);

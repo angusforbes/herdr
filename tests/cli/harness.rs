@@ -587,6 +587,31 @@ pub(super) fn write_fake_pong(
     stream.flush().unwrap();
 }
 
+/// Assert that a CLI request-envelope id has the expected prefix and a valid nonce suffix.
+///
+/// Since `unique_request` now appends `:<hex-nonce>` to every CLI request id, plain
+/// `assert_eq!(id, "cli:plugin")` comparisons fail.  This helper checks:
+/// - the id starts with `expected_prefix:`
+/// - the remainder (nonce) is non-empty and contains only lowercase hex digits
+///
+/// This is intentionally more precise than a bare `starts_with`: it requires the
+/// separator colon and a non-empty valid nonce, not just any prefix match.
+pub(super) fn assert_id_prefix_with_nonce(id_value: &serde_json::Value, expected_prefix: &str) {
+    let id = id_value
+        .as_str()
+        .unwrap_or_else(|| panic!("id field is not a string: {id_value:?}"));
+    let with_sep = format!("{expected_prefix}:");
+    assert!(
+        id.starts_with(&with_sep),
+        "expected id to start with {with_sep:?}, got {id:?}"
+    );
+    let nonce = &id[with_sep.len()..];
+    assert!(
+        !nonce.is_empty() && nonce.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+        "nonce suffix must be a non-empty lowercase hex string in id {id:?}"
+    );
+}
+
 pub(super) fn accept_fake_cli_operation(listener: &UnixListener) -> (UnixStream, String) {
     loop {
         let (mut stream, _) = listener.accept().unwrap();

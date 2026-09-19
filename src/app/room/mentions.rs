@@ -25,6 +25,7 @@ pub(crate) fn key(name: &str) -> String {
 /// Leading `@` mentions of `text`, in order, as raw (unresolved) strings.
 /// A mention is `@word`, or `@"quoted words"`. Stops at the first non-mention word.
 /// Multi-word names without quotes are handled in `resolve` by greedy matching.
+#[cfg(test)]
 pub(crate) fn leading_mentions(text: &str) -> Vec<&str> {
     resolve_tokens(text, |_| false).0
 }
@@ -32,7 +33,7 @@ pub(crate) fn leading_mentions(text: &str) -> Vec<&str> {
 /// Walk the leading mentions. `is_name(candidate)` says whether a multi-word
 /// candidate (mention + following plain words) names a member; when it does, the
 /// following words are consumed as part of that mention. Returns the mentions.
-fn resolve_tokens<'a>(text: &'a str, is_name: impl Fn(&str) -> bool) -> (Vec<&'a str>, ()) {
+fn resolve_tokens(text: &str, is_name: impl Fn(&str) -> bool) -> (Vec<&str>, ()) {
     let mut out = Vec::new();
     let mut rest = text.trim_start();
     while let Some(after_at) = rest.strip_prefix('@') {

@@ -65,6 +65,15 @@ impl App {
         &self,
         target: &str,
     ) -> Result<crate::api::schema::AgentInfo, TerminalTargetError> {
+        // Waiting fork launches are runtime reservations, not yet agent terminals.
+        if let Some(agent) = self.collect_agent_infos().into_iter().find(|agent| {
+            agent.launch_pending
+                && (agent.pane_id == target
+                    || agent.terminal_id == target
+                    || agent.name.as_deref() == Some(target))
+        }) {
+            return Ok(agent);
+        }
         let resolved = self.resolve_agent_target(target)?;
         self.agent_info(resolved.ws_idx, resolved.pane_id)
             .ok_or_else(|| TerminalTargetError::NotFound {
@@ -182,7 +191,12 @@ impl App {
             .terminals
             .get(&terminal_id)
             .ok_or_else(|| AgentStartError::TargetNotFound(params.pane_id.clone()))?;
-        if terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some() {
+        if terminal.is_agent_terminal()
+            || terminal.managed_agent_kind().is_some()
+            || self
+                .pending_conversation_launches
+                .contains_key(&terminal_id)
+        {
             return Err(AgentStartError::TargetBusy(params.pane_id));
         }
         let runtime = self
@@ -366,14 +380,17 @@ impl App {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane_state = ws.pane_state(pane_id)?;
         let terminal = self.state.terminals.get(&pane_state.attached_terminal_id)?;
-        if !terminal.is_agent_terminal() {
+        let queued = self.pending_conversation_launches.get(&terminal.id);
+        if !terminal.is_agent_terminal() && queued.is_none() {
             return None;
         }
         let pane = self.pane_info(ws_idx, pane_id)?;
         Some(crate::api::schema::AgentInfo {
             terminal_id: pane.terminal_id,
-            name: terminal.agent_name.clone(),
-            agent: pane.agent,
+            name: queued
+                .map(|launch| launch.name.clone())
+                .or_else(|| terminal.agent_name.clone()),
+            agent: pane.agent.or_else(|| queued.map(|_| "pi".into())),
             title: pane.title,
             terminal_title: pane.terminal_title,
             terminal_title_stripped: pane.terminal_title_stripped,
@@ -387,8 +404,8 @@ impl App {
             tab_id: pane.tab_id,
             pane_id: pane.pane_id,
             focused: pane.focused,
-            launch_pending: terminal.managed_agent_launch_pending(),
-            interactive_ready: terminal.managed_agent_interactive_ready(),
+            launch_pending: queued.is_some() || terminal.managed_agent_launch_pending(),
+            interactive_ready: queued.is_none() && terminal.managed_agent_interactive_ready(),
             state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,
@@ -410,7 +427,7 @@ impl App {
     }
 }
 
-fn available_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<String> {
+pub(super) fn available_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<String> {
     #[cfg(test)]
     if runtime.child_pid().is_none() {
         return Some("sh".into());

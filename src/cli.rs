@@ -943,8 +943,9 @@ fn parse_agent_status(value: &str) -> std::io::Result<AgentStatus> {
         "blocked" => Ok(AgentStatus::Blocked),
         "done" => Ok(AgentStatus::Done),
         "unknown" => Ok(AgentStatus::Unknown),
+        "awaiting" => Ok(AgentStatus::Awaiting),
         _ => Err(std::io::Error::other(format!(
-            "invalid agent status: {value} (expected idle, working, blocked, done, or unknown)"
+            "invalid agent status: {value} (expected idle, working, blocked, done, unknown, or awaiting)"
         ))),
     }
 }
@@ -955,8 +956,9 @@ pub(super) fn parse_pane_agent_state(value: &str) -> std::io::Result<PaneAgentSt
         "working" => Ok(PaneAgentState::Working),
         "blocked" => Ok(PaneAgentState::Blocked),
         "unknown" => Ok(PaneAgentState::Unknown),
+        "awaiting" => Ok(PaneAgentState::Awaiting),
         _ => Err(std::io::Error::other(format!(
-            "invalid pane agent state: {value} (expected idle, working, blocked, or unknown)"
+            "invalid pane agent state: {value} (expected idle, working, blocked, unknown, or awaiting)"
         ))),
     }
 }
@@ -1085,6 +1087,20 @@ fn _print_json<T: Serialize>(value: &T) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn awaiting_status_parsers_accept_the_cli_value() {
+        assert_eq!(
+            super::parse_agent_status("awaiting").unwrap(),
+            super::AgentStatus::Awaiting
+        );
+        assert_eq!(
+            super::parse_pane_agent_state("awaiting").unwrap(),
+            super::PaneAgentState::Awaiting
+        );
+        assert!(super::parse_agent_status("await").is_err());
+        assert!(super::parse_pane_agent_state("await").is_err());
+    }
+
     #[test]
     fn parses_channel_set_argument() {
         assert_eq!(

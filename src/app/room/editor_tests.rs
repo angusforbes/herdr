@@ -169,8 +169,10 @@ fn room_editor_wrapping_retains_whitespace_and_exact_width() {
         rows("abcd\nx", 4),
         [Row { start: 0, end: 4 }, Row { start: 5, end: 6 }]
     );
-    let mut e = Editor::default();
-    e.cursor = 4;
+    let mut e = Editor {
+        cursor: 4,
+        ..Default::default()
+    };
     assert_eq!(
         e.project("abcd\nx", &rows("abcd\nx", 4), Rect::new(0, 0, 5, 2)),
         Some(Position::new(4, 0))

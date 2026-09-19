@@ -974,16 +974,17 @@ struct GlobalAgentCounts {
     blocked: usize,
     done: usize,
     working: usize,
+    awaiting: usize,
     idle: usize,
 }
 
 impl GlobalAgentCounts {
     fn total(&self) -> usize {
-        self.blocked + self.done + self.working + self.idle
+        self.blocked + self.done + self.working + self.awaiting + self.idle
     }
 
     fn any_pending(&self) -> bool {
-        self.blocked > 0 || self.done > 0 || self.working > 0
+        self.blocked > 0 || self.done > 0 || self.working > 0 || self.awaiting > 0
     }
 }
 
@@ -996,7 +997,7 @@ fn global_agent_counts(app: &AppState) -> GlobalAgentCounts {
             (AgentState::Working, _) => counts.working += 1,
             (AgentState::Idle, true) => counts.idle += 1,
             (AgentState::Unknown, _) => {}
-            (AgentState::Awaiting, _) => counts.working += 1,
+            (AgentState::Awaiting, _) => counts.awaiting += 1,
         }
     }
     counts
@@ -1007,12 +1008,13 @@ enum SummaryTone {
     Blocked,
     Done,
     Working,
+    Awaiting,
     Idle,
     Muted,
 }
 
 /// Ordered, non-zero breakdown for the header roll-up: attention states lead
-/// (blocked → done → working → idle). Pure so it can be unit-tested.
+/// (blocked → done → working → awaiting → idle). Pure so it can be unit-tested.
 fn agent_summary_segments(
     counts: GlobalAgentCounts,
     indicator_style: StatusIndicatorStyle,
@@ -1054,13 +1056,26 @@ fn agent_summary_segments(
         segments.push((
             agent_summary_text(
                 indicator_style,
-                AgentState::Awaiting,
+                AgentState::Working,
                 true,
                 None,
                 counts.working,
                 "working",
             ),
             SummaryTone::Working,
+        ));
+    }
+    if counts.awaiting > 0 {
+        segments.push((
+            agent_summary_text(
+                indicator_style,
+                AgentState::Awaiting,
+                true,
+                Some("◐"),
+                counts.awaiting,
+                "awaiting",
+            ),
+            SummaryTone::Awaiting,
         ));
     }
     if counts.idle > 0 {
@@ -1141,6 +1156,7 @@ fn agent_summary_line(app: &AppState, p: &Palette, max_width: u16) -> Line<'stat
                 SummaryTone::Blocked => p.red,
                 SummaryTone::Done => p.blue,
                 SummaryTone::Working => p.yellow,
+                SummaryTone::Awaiting => p.blue,
                 SummaryTone::Idle | SummaryTone::Muted => p.overlay1,
             };
             let style = Style::default().fg(color).bg(p.panel_bg);
@@ -1271,6 +1287,7 @@ mod tests {
             blocked: 2,
             done: 1,
             working: 2,
+            awaiting: 0,
             idle: 1,
         };
         let segments = agent_summary_segments(counts, StatusIndicatorStyle::Dots);
@@ -1288,6 +1305,7 @@ mod tests {
             blocked: 2,
             done: 1,
             working: 2,
+            awaiting: 3,
             idle: 1,
         };
         let labels: Vec<String> = agent_summary_segments(counts, StatusIndicatorStyle::Symbols)
@@ -1296,7 +1314,13 @@ mod tests {
             .collect();
         assert_eq!(
             labels,
-            ["× 2 blocked", "✓ 1 done", "◐ 2 working", "○ 1 idle"]
+            [
+                "× 2 blocked",
+                "✓ 1 done",
+                "● 2 working",
+                "◐ 3 awaiting",
+                "○ 1 idle"
+            ]
         );
     }
 
@@ -1363,6 +1387,7 @@ mod tests {
             blocked: 2,
             done: 1,
             working: 2,
+            awaiting: 0,
             idle: 1,
         };
         let (shown, truncated) = fit_summary_segments(
@@ -1380,6 +1405,7 @@ mod tests {
             blocked: 2,
             done: 1,
             working: 2,
+            awaiting: 0,
             idle: 1,
         };
         let (shown, truncated) = fit_summary_segments(
@@ -1388,6 +1414,22 @@ mod tests {
         );
         assert_eq!(shown.len(), 4);
         assert!(!truncated);
+    }
+
+    #[test]
+    fn awaiting_only_summary_is_not_idle() {
+        for style in [StatusIndicatorStyle::Dots, StatusIndicatorStyle::Symbols] {
+            let counts = GlobalAgentCounts {
+                awaiting: 2,
+                ..Default::default()
+            };
+            assert_eq!(counts.total(), 2);
+            assert!(counts.any_pending());
+            assert_eq!(
+                agent_summary_segments(counts, style),
+                vec![("◐ 2 awaiting".into(), SummaryTone::Awaiting)]
+            );
+        }
     }
 
     #[test]

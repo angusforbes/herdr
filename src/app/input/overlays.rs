@@ -40,13 +40,38 @@ impl App {
         }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                let shift = mouse
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT);
+                if self.handle_conversation_click(mouse.column, mouse.row, shift) {
+                    return true;
+                }
                 if let Some(click) = crate::app::search_pane::click_target(
                     &self.state.search_pane,
                     rect,
                     mouse.column,
                     mouse.row,
                 ) {
-                    self.handle_search_pane_click(click);
+                    if let crate::app::search_pane::SearchPaneClick::Hit(flat) = click {
+                        self.activate_search_hit(flat, shift);
+                    } else {
+                        self.handle_search_pane_click(click);
+                    }
+                }
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if self.state.conversation_preview.is_some() =>
+            {
+                let delta = if mouse.kind == MouseEventKind::ScrollUp {
+                    -3
+                } else {
+                    3
+                };
+                let (_, tree, _, _) = crate::app::conversation::preview_rects(rect);
+                if mouse.row >= tree.y && mouse.row < tree.y + tree.height {
+                    self.move_conversation_selection(delta);
+                } else {
+                    self.scroll_conversation_text(delta);
                 }
             }
             MouseEventKind::ScrollUp => self.state.scroll_search_pane(-3),

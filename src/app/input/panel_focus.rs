@@ -80,6 +80,9 @@ impl App {
         self.state.popup_pane.is_none()
             && !self.state.room_active()
             && matches!(self.state.mode, Mode::Navigate | Mode::SearchPane)
+            // A focused conversation preview owns plain arrows for tree navigation.
+            && !(self.state.mode == Mode::SearchPane
+                && self.state.conversation_preview.is_some())
             && matches!(key.code, KeyCode::Up | KeyCode::Down)
             && key.modifiers.is_empty()
     }
@@ -181,16 +184,18 @@ impl App {
                 self.state
                     .move_search_pane_selection(if previous { -1 } else { 1 });
                 if let Some(flat) = self.state.search_pane.selected {
-                    self.state.jump_to_search_hit(&self.terminal_runtimes, flat);
+                    self.activate_search_hit(flat, false);
                 }
                 self.state.mode = focus;
                 self.state.navigate_agents = agents;
             }
         } else if input {
+            self.state.conversation_preview = None;
             self.state.focus_search_pane();
             // Enter should submit the query, not activate an old selected hit.
             self.state.search_pane.selected = None;
         } else {
+            self.state.conversation_preview = None;
             let mode = self.state.search_pane.mode.toggled();
             self.switch_search_mode(mode);
         }
@@ -476,5 +481,186 @@ mod tests {
             .await;
         assert_eq!(app.state.mode, Mode::Terminal);
         assert!(!app.state.navigate_agents);
+    }
+
+    // -- regression: conversation preview integration -----------------------
+
+    fn dummy_preview() -> crate::app::conversation::ConversationPreview {
+        crate::app::conversation::ConversationPreview {
+            target: "fixture".into(),
+            messages: vec![
+                crate::pi_conversation::ConversationMessage {
+                    reference: crate::pi_conversation::MessageRef {
+                        session_path: "/fixture".into(),
+                        session_id: "s".into(),
+                        entry_id: "user1".into(),
+                        ancestry_hash: "h1".into(),
+                    },
+                    parent_message_id: None,
+                    role: "user".into(),
+                    text: "hello".into(),
+                    text_truncated: false,
+                    timestamp: String::new(),
+                    depth: 0,
+                    active: true,
+                    can_rewrite: false,
+                    can_continue: false,
+                },
+                crate::pi_conversation::ConversationMessage {
+                    reference: crate::pi_conversation::MessageRef {
+                        session_path: "/fixture".into(),
+                        session_id: "s".into(),
+                        entry_id: "asst1".into(),
+                        ancestry_hash: "h2".into(),
+                    },
+                    parent_message_id: Some("user1".into()),
+                    role: "assistant".into(),
+                    text: "world".into(),
+                    text_truncated: false,
+                    timestamp: String::new(),
+                    depth: 1,
+                    active: true,
+                    can_rewrite: false,
+                    can_continue: false,
+                },
+            ],
+            selected: 1,
+            tree_scroll: 0,
+            text_scroll: 0,
+            status: "2 messages".into(),
+        }
+    }
+
+    /// Fix 1: focused conversation preview Up/Down stays in the preview tree,
+    /// never reaches the PTY; press, repeat, and release are all captured.
+    #[tokio::test]
+    async fn focused_preview_arrows_navigate_tree_not_pty() {
+        let mut app = app();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.state.workspaces[0].tabs[0]
+            .runtimes
+            .insert(pane_id, runtime);
+        app.state.mode = Mode::SearchPane;
+        let mut preview = dummy_preview();
+        preview.selected = 0;
+        app.state.conversation_preview = Some(preview);
+        // Down press + repeat + release via attached-client route.
+        let down = TerminalKey::new(KeyCode::Down, KeyModifiers::empty());
+        app.route_client_events(
+            vec![
+                crate::raw_input::RawInputEvent::Key(down.clone()),
+                crate::raw_input::RawInputEvent::Key(down.clone().with_kind(KeyEventKind::Repeat)),
+                crate::raw_input::RawInputEvent::Key(down.with_kind(KeyEventKind::Release)),
+            ],
+            false,
+        );
+        // Nothing reached the terminal.
+        assert!(rx.try_recv().is_err(), "Down leaked to PTY with preview");
+        assert_eq!(app.state.conversation_preview.as_ref().unwrap().selected, 1);
+        assert_eq!(app.state.mode, Mode::SearchPane);
+
+        // Up through local TUI route.
+        app.handle_key(TerminalKey::new(KeyCode::Up, KeyModifiers::empty()))
+            .await;
+        assert!(rx.try_recv().is_err(), "Up leaked to PTY with preview");
+        assert_eq!(app.state.conversation_preview.as_ref().unwrap().selected, 0);
+    }
+
+    /// Ordinary/unfocused search arrows still reach the terminal.
+    #[tokio::test]
+    async fn unfocused_search_arrows_still_reach_terminal() {
+        for preview in [false, true] {
+            let mut app = app();
+            let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+            let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+            app.state.workspaces[0].tabs[0]
+                .runtimes
+                .insert(pane_id, runtime);
+            if preview {
+                // Navigate mode with preview open — arrows still go to terminal
+                // because panel_arrow_targets_terminal only excludes SearchPane.
+                app.state.mode = Mode::Navigate;
+                app.state.conversation_preview = Some(dummy_preview());
+            } else {
+                // SearchPane without preview — arrows go to terminal.
+                app.state.mode = Mode::SearchPane;
+                app.state.conversation_preview = None;
+            }
+            let down = TerminalKey::new(KeyCode::Down, KeyModifiers::empty());
+            app.route_client_events(
+                vec![
+                    crate::raw_input::RawInputEvent::Key(down.clone()),
+                    crate::raw_input::RawInputEvent::Key(down.with_kind(KeyEventKind::Release)),
+                ],
+                false,
+            );
+            assert_eq!(
+                rx.try_recv().unwrap().as_ref(),
+                b"\x1b[B",
+                "plain Down must reach terminal (preview={preview})"
+            );
+        }
+    }
+
+    /// Fix 3: Ctrl+' (search-input) and Ctrl+/ (search-mode) dismiss the preview.
+    #[test]
+    fn focus_input_and_toggle_mode_dismiss_preview() {
+        let mut app = app();
+        app.state.mode = Mode::SearchPane;
+        app.state.conversation_preview = Some(dummy_preview());
+        // Ctrl+' = search_input.
+        press(&mut app, KeyCode::Char('\''), KeyModifiers::CONTROL);
+        assert!(
+            app.state.conversation_preview.is_none(),
+            "Ctrl+' must dismiss preview"
+        );
+        assert_eq!(app.state.mode, Mode::SearchPane);
+        assert_eq!(app.state.search_pane.selected, None);
+
+        // Restore and test Ctrl+/ = search_mode.
+        app.state.conversation_preview = Some(dummy_preview());
+        press(&mut app, KeyCode::Char('/'), KeyModifiers::CONTROL);
+        assert!(
+            app.state.conversation_preview.is_none(),
+            "Ctrl+/ must dismiss preview"
+        );
+    }
+
+    /// Ctrl+' from non-SearchPane mode also dismisses preview.
+    #[test]
+    fn focus_input_from_terminal_mode_dismisses_preview() {
+        let mut app = app();
+        app.state.mode = Mode::Terminal;
+        app.state.conversation_preview = Some(dummy_preview());
+        press(&mut app, KeyCode::Char('\''), KeyModifiers::CONTROL);
+        assert!(app.state.conversation_preview.is_none());
+        assert_eq!(app.state.mode, Mode::SearchPane);
+    }
+
+    /// Popup and room precedence: popups prevent panel_arrow_targets_terminal;
+    /// room-active also blocks it. Both still exclude preview arrows.
+    #[test]
+    fn popup_and_room_block_arrow_terminal_forwarding() {
+        let mut app = app();
+        app.state.mode = Mode::SearchPane;
+        app.state.conversation_preview = Some(dummy_preview());
+        // Popup set: panel_arrow_targets_terminal is false regardless.
+        app.state.popup_pane = Some(crate::app::state::PopupPaneState {
+            terminal_id: crate::terminal::TerminalId::alloc(),
+            pane_id: crate::layout::PaneId::from_raw(999),
+            width: None,
+            height: None,
+        });
+        let key = TerminalKey::new(KeyCode::Down, KeyModifiers::empty());
+        assert!(
+            !app.panel_arrow_targets_terminal(&key),
+            "popup must block terminal arrows"
+        );
+        app.state.popup_pane = None;
+        // Without preview it would target terminal; with preview it must not.
+        assert!(!app.panel_arrow_targets_terminal(&key));
+        app.state.conversation_preview = None;
+        assert!(app.panel_arrow_targets_terminal(&key));
     }
 }

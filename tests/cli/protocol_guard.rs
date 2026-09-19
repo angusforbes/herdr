@@ -65,7 +65,8 @@ fn cli_rejects_protocol_mismatch_before_agent_wait_request() {
     assert_eq!(waited.status.code(), Some(1));
     assert!(waited.stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&waited.stderr).unwrap();
-    assert_eq!(error["id"], "cli:agent:wait");
+    // unique_request appends a per-call nonce: check prefix + valid hex nonce
+    assert_id_prefix_with_nonce(&error["id"], "cli:agent:wait");
     assert_eq!(error["error"]["code"], "protocol_mismatch");
     let message = error["error"]["message"].as_str().unwrap();
     assert!(

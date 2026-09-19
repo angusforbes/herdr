@@ -536,10 +536,12 @@ fn api_snapshot_prints_live_session_snapshot() {
             let (mut stream, line) = accept_fake_cli_operation(&listener);
             let request: serde_json::Value = serde_json::from_str(&line).unwrap();
             assert_eq!(request["method"], "session.snapshot");
-            assert_eq!(request["id"], "cli:api:snapshot");
+            // unique_request appends a per-call nonce: check prefix + valid hex nonce
+            assert_id_prefix_with_nonce(&request["id"], "cli:api:snapshot");
 
+            // Echo back the actual request id so the response envelope is correct.
             let response = serde_json::json!({
-                "id": "cli:api:snapshot",
+                "id": request["id"],
                 "result": {
                     "type": "ok",
                     "marker": "snapshot-passthrough"

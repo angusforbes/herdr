@@ -55,6 +55,26 @@ impl Selection {
     }
 }
 
+pub fn hit(
+    lines: &[String],
+    roles: &[super::TranscriptRole],
+    begin: usize,
+    area: Rect,
+    position: Position,
+) -> Option<Point> {
+    if lines.is_empty() || area.is_empty() {
+        return None;
+    }
+    let row = (begin + position.y.saturating_sub(area.y).min(area.height - 1) as usize)
+        .min(lines.len() - 1);
+    let inset = roles.get(row).map_or(0, |role| role.inset(area.width));
+    let column = (position.x.saturating_sub(area.x).min(area.width) as usize).saturating_sub(inset);
+    Some(Point {
+        row,
+        byte: super::editor::byte_at_column(&lines[row], column),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,24 +111,4 @@ mod tests {
             Point { row: 5, byte: 3 }
         );
     }
-}
-
-pub fn hit(
-    lines: &[String],
-    roles: &[super::TranscriptRole],
-    begin: usize,
-    area: Rect,
-    position: Position,
-) -> Option<Point> {
-    if lines.is_empty() || area.is_empty() {
-        return None;
-    }
-    let row = (begin + position.y.saturating_sub(area.y).min(area.height - 1) as usize)
-        .min(lines.len() - 1);
-    let inset = roles.get(row).map_or(0, |role| role.inset(area.width));
-    let column = (position.x.saturating_sub(area.x).min(area.width) as usize).saturating_sub(inset);
-    Some(Point {
-        row,
-        byte: super::editor::byte_at_column(&lines[row], column),
-    })
 }

@@ -6006,6 +6006,11 @@ mod tests {
     ) {
         let mut server = test_headless_server();
         let mut workspace = crate::workspace::Workspace::test_new("test");
+        // Pin the workspace ID so both retained and full render fixtures share the same
+        // workspace palette colour. Without this, each call to test_new() draws the next
+        // counter value and the two independently-created workspaces land on different
+        // palette entries, causing pixel-exact comparisons to fail on the tint channel.
+        workspace.id = "w1".to_string();
         let pane_id = workspace.focused_pane_id().expect("focused pane");
         workspace.insert_test_runtime(
             pane_id,

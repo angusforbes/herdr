@@ -381,3 +381,58 @@ Awaiting state has not been deployed or live-tested.
 Machine-local changes such as `~/.pi/agent/extensions/name-sync.ts`, global
 AGENTS.md, and deployment helpers outside this repository are NOT captured by
 this commit. They need a separate configuration backup if desired.
+
+## Integration-main development checkpoint (2026-09-18)
+
+The original checkpoint results above are historical, not the current result.
+Isolated worktree: `/home/agf/Work/herdr-worktrees/integration-main`.
+Parent `c1e9004` records the approved italics merge (same resulting tree as rooms).
+The consolidated merge joins that parent with search checkpoint `e16dc21`.
+Before publication, Git's merge marker was found missing after a reflog-recorded
+`reset: moving to HEAD`; reconciled files remained intact. A full binary diff
+was backed up before restoring the second-parent marker and committing.
+All three original checkpoint branches and a verified bundle are preserved in
+`/home/agf/Work/herdr-checkpoint-ouO0at/`; `live-baseline/` now also contains
+machine-local configuration and the installed binary backup.
+
+Current validation:
+- Linux formatting and all-target Clippy pass.
+- Full nextest: **3668 passed, 1 skipped**, including API-schema freshness.
+- Architecture checks, Pi/OpenCode integration assets and marketplace tests pass.
+- Maintenance Python tests: **98 passed** after documenting Alt+Space workspace
+  selection in the config reference.
+- Room/context/receiver and fork-prefill Node tests: **41 passed**.
+- `just check` cannot finish its Windows stage: `rustup` is absent on this
+  machine (Rust/Cargo are system-installed). No toolchain changes made.
+- Normal disposable search/branching smoke passed once; slow-shell mode still
+  exposes intermittent attached-client input failure. The bounded harness-only
+  investigation (integrate-test3) hit its turn limit without resolving it.
+  Parent removed its false-positive search-readiness predicate (generic Pi help
+  text); initial workspace-render readiness remains, but is not evidence that
+  search opened. Do not treat the live smoke gate as fully green.
+
+Integration fixes preserve terminal JumpHighlight alongside conversation
+previews, explicitly gate stale conversation activation before any fork, and
+route focused preview arrows through the tree. Search-input/mode shortcuts
+close previews; result navigation retains prior focus. Independent follow-up
+review (integrate-review-4, GPT-6 Astra) confirmed all three keyboard findings
+resolved and the stale-preview fork guard correct; no remaining high-impact
+issue found within that bounded static review. Awaiting parser/mobile/sound/width fixes now have
+regression coverage; reporter child tracking still only knows start events
+observed in its lifetime (reload/queued/workflow recovery not established).
+
+Fixture corrections retain exact retained/full frame equality and validate
+nonce-bearing CLI request IDs. The cross-area fixture uses Symbols mode and
+checks BOTH working and blocked rendering with workspace colours. Its config
+now uses the correct debug/release directory; default onboarding is retained
+because forcing it off changes initial input focus in the two-client fixture.
+
+No source changes have been deployed or pushed. Installed binary SHA256 still
+`c5d91d1e68c39ab6bb52b82379c989275a5a544eefda0e354558c86d0b7fc702`.
+Live Pi reporter remains the v8-compatible working fallback. Angus approved
+publishing this as a development checkpoint, with merge message
+`merge: consolidate search, branching and Herdr customizations`, to a genuine
+GitHub fork `angusforbes/herdr`, consolidated `main` plus recovery branches.
+This approval does not waive the documented validation gaps or authorize live
+deployment. Remaining smoke resolution, Windows validation, release build, and
+approval-based live handoff remain outstanding.

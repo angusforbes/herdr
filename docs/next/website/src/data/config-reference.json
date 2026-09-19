@@ -428,6 +428,12 @@
           "description": "Focus the next agent shown in the agent panel. Unset by default."
         },
         {
+          "key": "keys.toggle_workspace_selection",
+          "type": "keybinding",
+          "default": "\"alt+space\"",
+          "description": "Toggle whether the current workspace's agents are shown in the agent panel (the sidebar circle fills or empties)."
+        },
+        {
           "key": "keys.focus_agent",
           "type": "keybinding",
           "default": "unset",

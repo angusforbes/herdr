@@ -273,8 +273,11 @@ mod tests {
     fn state_icons_support_dot_and_distinct_symbol_styles() {
         let palette = Palette::catppuccin();
         for (indicator_style, expected_symbols) in [
-            (StatusIndicatorStyle::Dots, ["●", "●", "●", "○", "·"]),
-            (StatusIndicatorStyle::Symbols, ["×", "●", "✓", "○", "·"]),
+            (StatusIndicatorStyle::Dots, ["●", "●", "●", "○", "·", "◐"]),
+            (
+                StatusIndicatorStyle::Symbols,
+                ["×", "●", "✓", "○", "·", "◐"],
+            ),
         ] {
             for ((state, seen, color), expected_symbol) in [
                 (AgentState::Blocked, true, palette.red),
@@ -282,6 +285,7 @@ mod tests {
                 (AgentState::Idle, false, palette.teal),
                 (AgentState::Idle, true, palette.green),
                 (AgentState::Unknown, true, palette.overlay0),
+                (AgentState::Awaiting, true, palette.blue),
             ]
             .into_iter()
             .zip(expected_symbols)

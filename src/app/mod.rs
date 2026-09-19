@@ -13,6 +13,8 @@ mod api;
 mod api_helpers;
 pub(crate) use api_helpers::limit_snapshot_lines;
 mod config_io;
+pub(crate) mod conversation;
+mod conversation_launch;
 mod creation;
 mod git_refresh;
 mod ids;
@@ -107,6 +109,10 @@ pub struct App {
     pub(crate) direct_graphics_available: bool,
     pub(crate) pixel_mouse_available: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
+    pending_conversation_launches: std::collections::HashMap<
+        crate::terminal::TerminalId,
+        conversation_launch::PendingConversationLaunch,
+    >,
     pub event_tx: mpsc::Sender<AppEvent>,
     pub(crate) event_rx: mpsc::Receiver<AppEvent>,
     pub(crate) api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
@@ -591,6 +597,7 @@ impl App {
             keybind_help: state::KeybindHelpState::default(),
             navigator: state::NavigatorState::default(),
             search_pane: search_pane::SearchPaneState::default(),
+            conversation_preview: None,
             copy_mode: None,
             workspace_scroll: 0,
             agent_panel_scroll: 0,
@@ -761,6 +768,7 @@ impl App {
             direct_graphics_available: false,
             pixel_mouse_available: false,
             terminal_runtimes: restored_terminal_runtimes,
+            pending_conversation_launches: Default::default(),
             event_tx,
             event_rx,
             last_git_remote_status_refresh: Instant::now() - GIT_REMOTE_STATUS_REFRESH_INTERVAL,

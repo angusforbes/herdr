@@ -77,6 +77,8 @@ mod noninteractive_process;
 mod pane;
 mod pane_graphics_files;
 mod persist;
+mod pi_conversation;
+mod pi_fork;
 mod platform;
 mod plugin_command;
 mod plugin_paths;

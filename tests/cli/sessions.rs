@@ -205,7 +205,8 @@ fn dead_server_cli_reports_one_session_aware_json_line() {
         assert_eq!(lines.len(), 1, "expected exactly one JSON line: {stderr:?}");
 
         let response: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(response["id"], "cli:workspace:create");
+        // unique_request appends a per-call nonce: check prefix + valid hex nonce
+        assert_id_prefix_with_nonce(&response["id"], "cli:workspace:create");
         assert_eq!(response["error"]["code"], "server_not_running");
         assert_eq!(
             response["error"]["message"],
@@ -293,7 +294,7 @@ fn integration_commands_run_locally_when_server_is_missing() {
         .unwrap();
     assert_eq!(integration_status.status.code(), Some(0));
     let status_stdout = String::from_utf8_lossy(&integration_status.stdout);
-    assert!(status_stdout.contains("pi: current (v8)"));
+    assert!(status_stdout.contains("pi: current (v9)"));
     assert!(status_stdout.contains("claude: not installed"));
 
     let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_herdr"))

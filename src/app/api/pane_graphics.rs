@@ -417,7 +417,7 @@ impl App {
             None => match base64::engine::general_purpose::STANDARD.decode(params.data_base64) {
                 Ok(data) => data,
                 Err(_) => {
-                    return encode_error(id, "invalid_image", "data_base64 is not valid base64")
+                    return encode_error(id, "invalid_image", "data_base64 is not valid base64");
                 }
             },
         };
@@ -499,7 +499,7 @@ fn canonicalize_bgra(
     if format != crate::api::schema::PaneGraphicsFormat::Bgra {
         return format;
     }
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     crate::api::schema::PaneGraphicsFormat::Rgba

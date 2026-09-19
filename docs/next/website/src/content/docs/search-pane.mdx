@@ -1,0 +1,76 @@
+---
+title: Search and conversation branching
+description: Search agent panes and fork Pi conversations from exact messages.
+---
+
+`Ctrl+S` toggles the right-hand search panel. Type a query and press Enter.
+Tab switches between keyword and AI search. Results are grouped by agent, up to
+three recent hits per agent, within the sidebar's current workspace/view filters.
+
+## Pi conversations
+
+For a recognized Pi pane with a reported v3 session-file path, keyword search
+reads user and assistant messages from that conversation's tree, including
+inactive branches. It does not try to reconstruct message identity from terminal
+rows. If the file cannot be read, terminal search remains available and its hits
+cannot be used for branching.
+
+Click a Pi hit, or select it with arrows and press Enter, to open a message-tree
+and text preview. Arrows choose messages; PageUp/PageDown scroll the selected
+message. Escape returns to results. The preview is a bounded page around the
+selected message; long message text is explicitly marked as an excerpt. Forking
+uses the complete original entry, not its excerpt.
+
+- **Rewrite / Enter / Ctrl+B:** select a text-only user prompt, then create a
+  separate session containing its ancestry but not that prompt. The prompt is
+  placed in the new Pi editor for editing; it is **not submitted**.
+- **After / Ctrl+Enter / Alt+Enter:** create a separate session through the
+  selected message, with an empty editor. Shift+click on a Pi result or tree
+  message also performs this action. Some terminals intercept Shift+click; use
+  the visible After button or keyboard alternative in that case.
+
+The fork opens in a new right split using the original conversation's working
+directory. The original session is not rewritten. **This does not create a Git
+worktree or isolate filesystem edits:** both agents can edit the same files.
+
+Rewriting image-bearing prompts is initially disabled rather than silently
+losing attachments. Unsafe tool-call cuts and unsupported compaction formats
+are rejected with an explanation. Preparation currently targets Pi 0.85.1's
+v3 session semantics; retainedTail-only compactions are not supported by this
+adapter. Session changes between search and fork require a fresh search.
+
+Fork files are private and stored under Herdr's configuration directory in
+`conversation-forks/`. If launch fails, errors include recovery paths and pane
+IDs. Launch waits up to 15 seconds for the new shell to finish startup, then
+submits once; ambiguous submission failures are never automatically retried.
+Inspect retained artifacts before retrying. A queued launch request is not proof
+that Pi became ready. Draft prefill uses a private, exclusively consumed receipt,
+so restarting Pi cannot resurrect the old draft.
+
+## AI and other agents
+
+AI search is **bounded recent-excerpt search**, not exhaustive archive search:
+up to 200 recent Pi user/assistant entries per pane (2,000 characters per entry),
+or 200 recent terminal lines for other panes, within a shared prompt budget.
+Pi results are selected by supplied message IDs; invented IDs are ignored.
+Other agents retain terminal keyword/quote search and jump-to-scrollback, without
+branching. Source transcripts are sent to the configured AI provider when AI
+search runs. `HERDR_SEARCH_AI_MODEL` and `HERDR_SEARCH_AI_COMMAND` configure it.
+
+## Runtime API
+
+The JSON API exposes the same runtime operations:
+
+- `agent.conversation`: `{target, query?, limit?, offset?, around_entry_id?}`.
+  Reads the currently bound Pi session only. Pages default to 100 messages,
+  maximum 500. `around_entry_id` centers a non-search page on an exact message.
+  The response includes `messages`, `total`, `offset`, `has_more`, and
+  `partial_tail`. A message's `reference` includes session path/ID, entry ID,
+  and ancestry hash; pass it back unchanged.
+- `agent.fork`: `{target, reference, position: "rewrite" | "continue"}`.
+  Revalidates the current binding and ancestry, creates a distinct session and
+  pane, and requests Pi launch. The response distinguishes `launch_requested`
+  from `ready`.
+
+These methods are available over the JSON API; dedicated CLI subcommands are
+not yet provided.

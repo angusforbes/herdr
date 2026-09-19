@@ -115,7 +115,8 @@ fn plugin_list_preserves_protocol_mismatch_envelope() {
     assert_eq!(listed.status.code(), Some(1));
     assert!(listed.stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&listed.stderr).unwrap();
-    assert_eq!(error["id"], "cli:plugin");
+    // unique_request appends a per-call nonce: check prefix + valid hex nonce
+    assert_id_prefix_with_nonce(&error["id"], "cli:plugin");
     assert_eq!(error["error"]["code"], "protocol_mismatch");
     server.join().unwrap();
     cleanup_test_base(&base);
