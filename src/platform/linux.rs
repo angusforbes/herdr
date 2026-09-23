@@ -467,6 +467,16 @@ pub fn read_clipboard_text() -> Option<String> {
 }
 
 pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
+    // xdg-open's generic desktop fallback can run a Terminal=true handler
+    // directly against our null stdio, leaving an invisible editor. GIO honors
+    // the desktop entry and launches its terminal. Keep web opening unchanged.
+    if url.starts_with("file://") {
+        match local_file_open_command(url).spawn() {
+            Ok(child) => return Ok(Some(child)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
     Command::new("xdg-open")
         .arg(url)
         .stdin(Stdio::null())
@@ -474,6 +484,31 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
         .stderr(Stdio::null())
         .spawn()
         .map(Some)
+}
+
+fn local_file_open_command(url: &str) -> Command {
+    let mut command = Command::new("gio");
+    command
+        .arg("open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+#[cfg(test)]
+mod local_file_opener_tests {
+    #[test]
+    fn local_file_open_uses_gio_and_keeps_uri_one_argument() {
+        let uri = "file:///tmp/a%20b%3Btouch%20oops.txt";
+        let command = super::local_file_open_command(uri);
+        assert_eq!(command.get_program(), "gio");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![std::ffi::OsStr::new("open"), std::ffi::OsStr::new(uri)]
+        );
+    }
 }
 
 pub fn read_clipboard_image() -> Option<ClipboardImage> {

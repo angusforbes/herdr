@@ -1,0 +1,111 @@
+---
+title: Local file links
+description: Open existing local files and directories with Ctrl-click.
+---
+
+# Local File Ctrl-Click
+
+Herdr supports opening local files and directories by holding **Ctrl** and
+left-clicking on a path or file URI in any terminal pane — the same modifier
+used to open http/https URLs.
+
+## Supported path forms
+
+| Form | Example |
+|------|---------|
+| `file:///` URI (empty authority) | `file:///home/user/report.pdf` |
+| `file://localhost/` URI | `file://localhost/home/user/report.pdf` |
+| Absolute path | `/home/user/projects/foo/README.md` |
+| Home-relative path | `~/Documents/notes.txt` |
+| Relative path (requires live pane CWD) | `./src/main.rs` · `../sibling/file` |
+
+Paths with spaces are recognised when surrounded by single quotes, double
+quotes, or backticks (the existing quoted-path span logic applies):
+
+```
+open '/home/user/my documents/report.pdf'
+```
+
+## How it works
+
+1. **Modifier check** — the existing `Ctrl`+left-click modifier requirement is
+   unchanged. An OSC 8 hyperlink target under the cursor is authoritative: it
+   must be an accepted web URL or validated local file URI; an invalid target
+   does not fall back to the displayed text. Without an OSC 8 link, web URL
+   detection runs before local path detection.
+
+2. **Span detection** — `local_path_at_column` (in `src/app/actions.rs`) scans
+   the logical terminal line at the clicked column, checking in priority order:
+   a. Quoted spans already containing a `/` (spaces allowed).
+   b. `file://` URI spans.
+   c. Absolute-path tokens (`/…`) and home-relative tokens (`~/…`).
+   d. Relative-path tokens (`./…`, `../…`) — only when the pane CWD is known.
+
+3. **Validation** — all paths pass through `src/app/local_file.rs` before
+   being handed to the platform opener:
+   - `~` is expanded via `$HOME` (never via shell execution).
+   - Relative paths are resolved against the pane's live reported CWD.
+   - `std::fs::metadata` (follows symlinks) checks existence and target type.
+   - Only regular files and directories are accepted; devices, FIFOs, and
+     sockets are silently rejected.
+   - The result is encoded as a `file:///path` URI. On Linux, `gio open` opens
+     local file URIs so desktop handlers with `Terminal=true` get a visible
+     terminal. If the `gio` executable is absent, Herdr falls back to `xdg-open`.
+     Web URLs retain their existing `xdg-open` behavior.
+
+4. **OSC 8 hyperlinks** — `file://` URIs embedded by the terminal application
+   as OSC 8 hyperlinks are also accepted (same validation applies).
+
+## Security constraints
+
+- **No shell execution.** The path is never passed through a shell; only
+  the platform opener receives the validated `file://` URI as a single argument.
+  On Linux this is `gio open`, with the missing-executable fallback described above.
+- **Local only.** Remote authority in `file://` URIs (e.g. `file://server/share`)
+  is rejected.  UNC-style `//host/share` tokens are not treated as local paths.
+- **No control characters.** Control bytes (0x00–0x1f, 0x7f) in both raw and
+  percent-encoded form are rejected; encoded NUL (`%00`) is a hard rejection.
+- **Malformed percent-encoding rejected.** Any `%XX` escape where the digits are
+  not valid hex is rejected.
+- **Existence required.** Non-existent paths produce no action (the click is
+  silently ignored, consistent with how clicking on non-URL text works).
+- **Type-safe.** Character devices, block devices, FIFOs, and sockets are
+  rejected after `std::fs::metadata` follows symlinks.
+
+## Known limitations
+
+- **Relative paths require a live CWD.** Herdr tracks each pane's working
+  directory via shell integration hooks.  If CWD has not been reported (e.g. a
+  freshly opened pane without shell integration) relative-path detection falls
+  back to no-op.  Absolute and home-relative paths are not affected.
+
+- **`~user` expansion not supported.** Use `~/path` or `~/` for the home directory.
+  Bare `~` is not detected in terminal text; `~otheruser/path` is invalid.
+
+- **Unix-style paths.** This addition is tested on Linux. Windows drive-letter paths
+  are not supported. File paths with spaces need quotes/backticks or percent-encoding
+  in a `file://` URI. Line/column suffixes such as `file.rs:42` are not supported.
+
+- **Opening is not sandboxing.** The default application decides how to handle a
+  file. Only Ctrl-click files you intend to open. File URIs reference this machine,
+  not a remote SSH host. Rendering and mouse-hover do not probe the filesystem.
+  File-type checks describe the path at validation time: another process can
+  replace a file or symlink before the default application opens it.
+
+- **Pane output and CWD reports are not trusted provenance.** A terminal program
+  can print paths or influence reported CWD. Relative paths, including `..`, can
+  resolve outside the pane's launch directory; there is no directory sandbox.
+  Verify the intended destination before opening links from untrusted output.
+
+- **`safe_web_url` not changed.** The http/https fast path (`safe_web_url`) is
+  deliberately unchanged to avoid unintended side-effects on callers that
+  depend on its narrow semantics (copy, display, etc.).  Local file detection
+  is a parallel code path that only activates from `url_at_pane_cell`.
+
+## Implementation files
+
+| File | Purpose |
+|------|---------|
+| `src/app/local_file.rs` | Path validation, `~` expansion, percent-encoding, `file://` URI assembly |
+| `src/app/actions.rs` | `local_path_at_column`, `abs_path_span_at_column`, `file_uri_span_at_column`, `rel_path_span_at_column`; modified `url_at_pane_cell` |
+| `src/app/mod.rs` | Module declaration (`pub(crate) mod local_file`) |

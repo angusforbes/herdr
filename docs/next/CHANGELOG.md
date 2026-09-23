@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Ctrl+left-click opens existing local files and directories from validated file URIs and supported path forms, including quoted paths with spaces. Relative paths require the pane's live working directory. Linux uses `gio open` for file URIs, preserving terminal-based default applications, with a fallback when GIO is unavailable.
 - Right-clicking a tab in the desktop sidebar now shows **Agent Split** (for any session with the `twin` token) or **Agent Merge** (additionally for clone sessions) when the `pi-twin` package is installed and the pane carries its metadata token. Selecting the item invokes `pi-twin clone --pane <id>` or `pi-twin merge --pane <id>` asynchronously without blocking the TUI. Errors from a missing binary or non-zero exit are shown in the config-diagnostic overlay. Multi-pane tabs are excluded to avoid agent ambiguity.
 
 ## [0.8.2] - 2026-08-19

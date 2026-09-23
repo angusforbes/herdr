@@ -1093,6 +1093,64 @@ mod tests {
         assert!(super_app.state.plugin_command_logs.is_empty());
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_file_ctrl_click_resolves_wrapped_and_osc8_links() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-click-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{} report.html", "a".repeat(160)));
+        std::fs::write(&path, b"test").unwrap();
+        let uri = crate::app::local_file::path_to_safe_file_uri(&path).unwrap();
+        let (app, _) = app_with_screen_bytes(uri.as_bytes());
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        assert_eq!(
+            app.state
+                .url_at_pane_cell(&app.terminal_runtimes, pane_id, 1, 1),
+            Some(uri.clone())
+        );
+        let osc = format!("\x1b]8;;{uri}\x1b\\Open report\x1b]8;;\x1b\\");
+        let (mut app, info) = app_with_screen_bytes(osc.as_bytes());
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        assert_eq!(
+            app.state
+                .url_at_pane_cell(&app.terminal_runtimes, pane_id, 0, 2),
+            Some(uri.clone())
+        );
+        let source = 41;
+        let click = modified_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            info.inner_rect.x + 2,
+            info.inner_rect.y,
+            KeyModifiers::CONTROL,
+        );
+        let mut opened = None;
+        assert!(app.handle_modified_url_click_with(source, click, |url| {
+            opened = Some(url.to_owned());
+            Ok(None)
+        }));
+        assert_eq!(opened, Some(uri));
+        let plain = modified_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            info.inner_rect.x + 2,
+            info.inner_rect.y,
+            KeyModifiers::NONE,
+        );
+        assert!(
+            !app.handle_modified_url_click_with(source, plain, |_| panic!(
+                "unmodified click must not open a file"
+            ))
+        );
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+
     #[tokio::test]
     async fn pane_cell_url_resolver_finds_visible_url() {
         let line = "see https://example.com/pr/307.";

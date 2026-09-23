@@ -2278,6 +2278,8 @@ impl AppState {
         }
 
         let rt = self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id)?;
+        // Never use the server's CWD or stale launch-state CWD for relative paths.
+        let pane_cwd = rt.cwd();
         let screen_col = info.inner_rect.x.saturating_add(col);
         let screen_row = info.inner_rect.y.saturating_add(viewport_row);
         if let Some((_, _, uri)) = rt
@@ -2285,7 +2287,14 @@ impl AppState {
             .into_iter()
             .find(|((x, y), _, _)| *x == screen_col && *y == screen_row)
         {
-            return safe_web_url(&uri).map(str::to_owned);
+            // Prefer http/https from OSC 8; also accept validated local file:// URIs.
+            if let Some(web) = safe_web_url(&uri) {
+                return Some(web.to_owned());
+            }
+            if let Some(local) = crate::app::local_file::validate_file_uri(&uri) {
+                return Some(local);
+            }
+            return None;
         }
 
         let metrics = self.pane_scroll_metrics(terminal_runtimes, pane_id);
@@ -2305,7 +2314,12 @@ impl AppState {
             .find('\n')
             .map_or(visible_text.len(), |idx| logical_cell.byte_index + idx);
         let line = visible_text.get(line_start..line_end)?;
-        url_at_column(line, logical_cell.logical_col).map(str::to_owned)
+        // Try web URL first; fall back to local file path detection.
+        url_at_column(line, logical_cell.logical_col)
+            .map(str::to_owned)
+            .or_else(|| {
+                local_path_at_column(line, logical_cell.logical_col, pane_cwd.as_deref(), None)
+            })
     }
 
     pub fn copy_selection(&mut self, terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry) {
@@ -2414,6 +2428,183 @@ fn url_spans(cells: &[TextCell]) -> Vec<CellSpan> {
         }
     }
     spans
+}
+
+/// Detects a local file path at `col` in `row` and converts it to a `file://` URI.
+///
+/// Checked in priority order:
+/// 1. Quoted path spans that contain a `/` (reuses existing `quoted_path_span_at_column`).
+/// 2. `file://` URI spans (including `file://localhost/`).
+/// 3. Absolute path tokens starting with `/`.
+/// 4. Home-relative tokens starting with `~/`.
+///
+/// Relative paths (`./`, `../`) require a known `cwd` which the caller supplies from the
+/// pane's reported working directory.  If `cwd` is `None` relative paths are skipped.
+/// `home_override` replaces `$HOME` for `~` expansion — pass `None` in production.
+pub(crate) fn local_path_at_column(
+    row: &str,
+    col: u16,
+    cwd: Option<&std::path::Path>,
+    home_override: Option<&std::path::Path>,
+) -> Option<String> {
+    let cells = text_cells(row);
+    let clicked_idx = cell_index_at_column(&cells, col)?;
+
+    // 1. Quoted spans (can contain spaces; already filtered to contain '/').
+    if let Some(span) = quoted_path_span_at_column(&cells, clicked_idx) {
+        let token = extract_cell_span_text(row, span);
+        if token.starts_with("./") || token.starts_with("../") {
+            return cwd
+                .and_then(|base| crate::app::local_file::path_to_safe_file_uri(&base.join(token)));
+        }
+        if looks_like_local_path_token(token) {
+            // A quoted span is authoritative: don't open a shorter prefix if it fails.
+            return crate::app::local_file::local_path_token_to_file_uri(token, home_override);
+        }
+    }
+
+    // 2. file:// URI spans.
+    if let Some(span) = file_uri_span_at_column(&cells, clicked_idx) {
+        let token = extract_cell_span_text(row, span);
+        return crate::app::local_file::local_path_token_to_file_uri(token, home_override);
+    }
+
+    // 3 & 4. Absolute path tokens and ~/…  tokens.
+    if let Some(span) = abs_path_span_at_column(&cells, clicked_idx) {
+        let token = extract_cell_span_text(row, span);
+        if let Some(uri) =
+            crate::app::local_file::local_path_token_to_file_uri(token, home_override)
+        {
+            return Some(uri);
+        }
+    }
+
+    // 5. Relative path tokens (only when pane CWD is known).
+    if let Some(base) = cwd {
+        if let Some(span) = rel_path_span_at_column(&cells, clicked_idx) {
+            let token = extract_cell_span_text(row, span);
+            // Manually build an absolute path and delegate to path_to_safe_file_uri.
+            let full = base.join(token);
+            if let Some(uri) = crate::app::local_file::path_to_safe_file_uri(&full) {
+                return Some(uri);
+            }
+        }
+    }
+
+    None
+}
+
+/// Returns `true` when `token` looks like it could be a local path that
+/// `local_path_token_to_file_uri` would accept (quick syntactic pre-filter
+/// before touching the filesystem).
+fn looks_like_local_path_token(token: &str) -> bool {
+    token.starts_with('/')
+        || token.starts_with("~/")
+        || token == "~"
+        || token.starts_with("file://")
+}
+
+/// Extracts the raw text for a `CellSpan` from the source `row`.
+fn extract_cell_span_text(row: &str, span: CellSpan) -> &str {
+    let start_byte = byte_index_for_cell(row, span.start);
+    let end_byte = byte_index_after_cell(row, span.end);
+    row.get(start_byte..end_byte).unwrap_or("")
+}
+
+/// Finds a `file://` URI span that contains `clicked_idx`.
+fn file_uri_span_at_column(cells: &[TextCell], clicked_idx: usize) -> Option<CellSpan> {
+    let mut start = 0;
+    while start < cells.len() {
+        if starts_with_chars(&cells[start..], "file://") {
+            let mut end = start;
+            while end + 1 < cells.len() && !cells[end + 1].ch.is_whitespace() {
+                end += 1;
+            }
+            if clicked_idx >= start && clicked_idx <= end {
+                let span = trim_url_edges(cells, CellSpan { start, end })?;
+                return span.contains(clicked_idx).then_some(span);
+            }
+            start = end + 1;
+        } else {
+            start += 1;
+        }
+    }
+    None
+}
+
+/// Finds an absolute-path or home-relative-path span containing `clicked_idx`.
+///
+/// A qualifying token starts with `/` (but not `//`) or `~/`, and continues
+/// until the next whitespace.  Trailing punctuation is trimmed by `trim_url_edges`.
+fn abs_path_span_at_column(cells: &[TextCell], clicked_idx: usize) -> Option<CellSpan> {
+    // Walk backward from clicked_idx to find the start of the current token.
+    let token_start = {
+        let mut s = clicked_idx;
+        while s > 0 && !cells[s - 1].ch.is_whitespace() {
+            s -= 1;
+        }
+        s
+    };
+
+    let ch0 = cells.get(token_start)?.ch;
+    let ch1 = cells.get(token_start + 1).map(|c| c.ch);
+
+    let is_abs = ch0 == '/' && ch1 != Some('/');
+    let is_home = ch0 == '~' && ch1 == Some('/');
+    if !is_abs && !is_home {
+        return None;
+    }
+
+    // For `/` alone (no further content), require at least one more char to avoid
+    // matching a lone slash that is a shell operator.
+    if is_abs && cells.get(token_start + 1).is_none() {
+        return None;
+    }
+
+    let mut end = token_start;
+    while end + 1 < cells.len() && !cells[end + 1].ch.is_whitespace() {
+        end += 1;
+    }
+
+    let span = trim_url_edges(
+        cells,
+        CellSpan {
+            start: token_start,
+            end,
+        },
+    )?;
+    span.contains(clicked_idx).then_some(span)
+}
+
+/// Finds a relative-path span (`./…` or `../…`) containing `clicked_idx`.
+fn rel_path_span_at_column(cells: &[TextCell], clicked_idx: usize) -> Option<CellSpan> {
+    let token_start = {
+        let mut s = clicked_idx;
+        while s > 0 && !cells[s - 1].ch.is_whitespace() {
+            s -= 1;
+        }
+        s
+    };
+
+    let is_rel = starts_with_chars(&cells[token_start..], "./")
+        || starts_with_chars(&cells[token_start..], "../");
+    if !is_rel {
+        return None;
+    }
+
+    let mut end = token_start;
+    while end + 1 < cells.len() && !cells[end + 1].ch.is_whitespace() {
+        end += 1;
+    }
+
+    let span = trim_url_edges(
+        cells,
+        CellSpan {
+            start: token_start,
+            end,
+        },
+    )?;
+    span.contains(clicked_idx).then_some(span)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3699,6 +3890,208 @@ mod tests {
             None
         );
         assert_eq!(selected_url("open file:///tmp/report", "file"), None);
+    }
+
+    // ---- local_path_at_column tests -----------------------------------------
+
+    /// Helper that calls `local_path_at_column` with no CWD or home override.
+    fn selected_local_path(row: &str, click: &str) -> Option<String> {
+        local_path_at_column(row, col_of(row, click), None, None)
+    }
+
+    /// Helper with a fake home directory for `~/` expansion.
+    fn selected_local_path_home(row: &str, click: &str, home: &std::path::Path) -> Option<String> {
+        local_path_at_column(row, col_of(row, click), None, Some(home))
+    }
+
+    /// Helper with a fake CWD for relative-path expansion.
+    fn selected_local_path_cwd(row: &str, click: &str, cwd: &std::path::Path) -> Option<String> {
+        local_path_at_column(row, col_of(row, click), Some(cwd), None)
+    }
+
+    #[test]
+    fn local_path_at_column_absolute_existing_file() {
+        let tmp = std::env::temp_dir();
+        let file = tmp.join("herdr-action-test-abs.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let row = format!("open {}", file.display());
+        let result = selected_local_path(&row, file.to_str().unwrap());
+        std::fs::remove_file(&file).unwrap();
+        let uri = result.expect("should detect absolute path");
+        assert!(
+            uri.starts_with("file:///"),
+            "expected file:// URI, got {uri}"
+        );
+    }
+
+    #[test]
+    fn local_path_at_column_absolute_nonexistent_returns_none() {
+        let result = selected_local_path("see /no/such/path/xyz99999 here", "/no");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn local_path_at_column_tilde_with_home_override() {
+        let tmp = std::env::temp_dir();
+        let home = tmp.join("herdr-action-home");
+        std::fs::create_dir_all(home.join("docs")).unwrap();
+        let file = home.join("docs/readme.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let row = "open ~/docs/readme.txt here";
+        let result = selected_local_path_home(row, "~/", &home);
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(home.join("docs")).unwrap();
+        std::fs::remove_dir(&home).unwrap();
+        assert!(
+            result.is_some_and(|uri| uri.starts_with("file:///")),
+            "~/path should expand to file:// URI"
+        );
+    }
+
+    #[test]
+    fn local_path_at_column_relative_with_cwd() {
+        let tmp = std::env::temp_dir();
+        let dir = tmp.join("herdr-action-rel-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("hello.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let row = "cat ./hello.txt";
+        let result = selected_local_path_cwd(row, "./", &dir);
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        assert!(
+            result.is_some_and(|uri| uri.starts_with("file:///")),
+            "./path with CWD should produce file:// URI"
+        );
+    }
+
+    #[test]
+    fn local_path_at_column_quoted_relative_and_wide_prefix() {
+        let dir = std::env::temp_dir().join(format!("herdr-relative-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("my report.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let expected = crate::app::local_file::path_to_safe_file_uri(&file);
+        let row = "界 './my report.txt'";
+        assert_eq!(selected_local_path_cwd(row, "report", &dir), expected);
+        assert_eq!(selected_local_path(row, "report"), None);
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn local_path_at_column_relative_without_cwd_returns_none() {
+        assert_eq!(
+            selected_local_path("cat ./something", "./"),
+            None,
+            "relative paths without CWD must not produce a URI"
+        );
+    }
+
+    #[test]
+    fn local_path_at_column_file_uri_in_text() {
+        let tmp = std::env::temp_dir();
+        let file = tmp.join("herdr-action-file-uri.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let uri_in_text = format!("file://{}", file.display());
+        let row = format!("see {uri_in_text} end");
+        let result = selected_local_path(&row, "file");
+        std::fs::remove_file(&file).unwrap();
+        assert!(
+            result.is_some_and(|u| u.starts_with("file:///")),
+            "file:// URI in text should be detected"
+        );
+    }
+
+    #[test]
+    fn local_path_at_column_quoted_path_with_space() {
+        let tmp = std::env::temp_dir();
+        let dir = tmp.join("herdr my docs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("report.pdf");
+        std::fs::write(&file, b"x").unwrap();
+        let row = format!("open '{}' now", file.display());
+        let result = selected_local_path(&row, "report");
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        assert!(
+            result.is_some_and(|u| u.starts_with("file:///")),
+            "quoted path with space should be detected"
+        );
+    }
+
+    #[test]
+    fn local_path_at_column_trailing_punctuation_trimmed() {
+        let tmp = std::env::temp_dir();
+        let file = tmp.join("herdr-punct-trim.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let row = format!("error: {}:", file.display());
+        let result = selected_local_path(&row, file.to_str().unwrap());
+        std::fs::remove_file(&file).unwrap();
+        assert!(
+            result.is_some_and(|u| u.starts_with("file:///")),
+            "trailing colon should be trimmed before validating"
+        );
+    }
+
+    #[test]
+    fn local_path_at_column_web_url_not_intercepted() {
+        let result = local_path_at_column(
+            "see https://example.com/foo here",
+            col_of("see https://example.com/foo here", "example"),
+            None,
+            None,
+        );
+        assert_eq!(
+            result, None,
+            "https URL should not be treated as a local path"
+        );
+    }
+
+    #[test]
+    fn local_path_at_column_rejects_device_file() {
+        let result = selected_local_path("open /dev/null here", "/dev");
+        assert_eq!(result, None, "/dev/null must not produce a file:// URI");
+    }
+
+    #[test]
+    fn local_path_at_column_directory_is_accepted() {
+        let tmp = std::env::temp_dir();
+        let dir = tmp.join("herdr-action-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let row = format!("ls {}", dir.display());
+        let result = selected_local_path(&row, dir.to_str().unwrap());
+        std::fs::remove_dir(&dir).unwrap();
+        assert!(
+            result.is_some_and(|u| u.starts_with("file:///")),
+            "directories should produce a file:// URI"
+        );
+    }
+
+    #[test]
+    fn local_path_at_column_file_uri_remote_authority_ignored() {
+        let result = local_path_at_column(
+            "open file://server/share/file.txt here",
+            col_of("open file://server/share/file.txt here", "file"),
+            None,
+            None,
+        );
+        assert_eq!(
+            result, None,
+            "file:// with remote authority must be rejected"
+        );
+    }
+
+    #[test]
+    fn url_at_column_still_returns_https_unaffected() {
+        // Regression: url_at_column must not be changed by this feature.
+        assert_eq!(
+            url_at_column(
+                "see https://example.com/x.",
+                col_of("see https://example.com/x.", "example")
+            ),
+            Some("https://example.com/x")
+        );
     }
 
     #[test]
