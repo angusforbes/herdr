@@ -6,7 +6,7 @@ use tracing::warn;
 use crate::{
     app::state::{
         AgentPanelSort, AppState, ContextMenuKind, ContextMenuState, DragState, DragTarget,
-        MenuListState, Mode, RightClickPassthroughGesture, TabPressState, ViewLayout,
+        MenuListState, Mode, RightClickPassthroughGesture, TabPressState, TwinPaneInfo, ViewLayout,
         WorkspacePressState,
     },
     layout::{PaneInfo, SplitBorder},
@@ -70,6 +70,42 @@ enum MobileMouseResult {
 }
 
 impl AppState {
+    /// Return live-clone eligibility for a single-pane tab's context menu.
+    ///
+    /// Eligibility requires **all** of:
+    /// - exactly one pane in the tab (multi-pane is refused to avoid agent ambiguity),
+    /// - `twin=1` metadata token set by the pi-twin extension, and
+    /// - a non-empty `twin_session` token that will be passed to the CLI as
+    ///   `--expected-session` and re-checked at dispatch time to detect session reuse.
+    ///
+    /// Returns `None` when any condition is not met.
+    fn twin_pane_for_tab(&self, ws_idx: usize, tab_idx: usize) -> Option<TwinPaneInfo> {
+        let ws = self.workspaces.get(ws_idx)?;
+        let tab = ws.tabs.get(tab_idx)?;
+        if tab.panes.len() != 1 {
+            return None;
+        }
+        let (&pane_id, pane_state) = tab.panes.iter().next()?;
+        let terminal = self.terminals.get(&pane_state.attached_terminal_id)?;
+        if terminal.metadata_tokens.value("twin") != Some("1") {
+            return None;
+        }
+        let session_id = terminal.metadata_tokens.value("twin_session").unwrap_or("");
+        if session_id.is_empty() {
+            return None;
+        }
+        let session_id = session_id.to_string();
+        let pane_number = ws.public_pane_number(pane_id)?;
+        let public_pane_id = crate::workspace::public_pane_id_for_number(&ws.id, pane_number);
+        let is_clone = terminal.metadata_tokens.value("twin_parent") == Some("1");
+        Some(TwinPaneInfo {
+            pane_id,
+            public_pane_id,
+            session_id,
+            is_clone,
+        })
+    }
+
     pub(crate) fn handle_pane_mouse_only(
         &mut self,
         terminal_runtimes: &TerminalRuntimeRegistry,
@@ -1094,8 +1130,13 @@ impl AppState {
                 if let (Some(ws_idx), Some(tab_idx)) =
                     (self.active, self.tab_at(mouse.column, mouse.row))
                 {
+                    let twin_pane = self.twin_pane_for_tab(ws_idx, tab_idx);
                     self.context_menu = Some(ContextMenuState {
-                        kind: ContextMenuKind::Tab { ws_idx, tab_idx },
+                        kind: ContextMenuKind::Tab {
+                            ws_idx,
+                            tab_idx,
+                            twin_pane,
+                        },
                         x: mouse.column,
                         y: mouse.row,
                         list: MenuListState::new(0),
@@ -4195,7 +4236,8 @@ mod tests {
             menu.kind,
             ContextMenuKind::Tab {
                 ws_idx: 0,
-                tab_idx: 1
+                tab_idx: 1,
+                twin_pane: None,
             }
         );
         assert_eq!(app.state.mode, Mode::ContextMenu);
@@ -4774,5 +4816,125 @@ mod tests {
         };
 
         assert_eq!(wheel_routing(input_state), WheelRouting::HostScroll);
+    }
+
+    // ── twin_pane_for_tab eligibility tests ──────────────────────────
+
+    const TEST_SESSION_ID: &str = "test-session-uuid-1234";
+
+    fn state_with_twin_token(is_clone: bool) -> crate::app::state::AppState {
+        let mut state = crate::app::state::AppState::test_new();
+        state.workspaces = vec![Workspace::test_new("main")];
+        state.active = Some(0);
+        state.ensure_test_terminals();
+        // Patch tokens on the single pane's terminal.
+        let terminal_id = state.workspaces[0].tabs[0]
+            .panes
+            .values()
+            .next()
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        let now = std::time::Instant::now();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        let mut patch = std::collections::HashMap::new();
+        patch.insert("twin".into(), Some("1".into()));
+        patch.insert("twin_session".into(), Some(TEST_SESSION_ID.into()));
+        if is_clone {
+            patch.insert("twin_parent".into(), Some("1".into()));
+        }
+        terminal.metadata_tokens.patch(patch, None, now);
+        state
+    }
+
+    #[test]
+    fn twin_pane_for_tab_returns_none_without_token() {
+        let state = crate::app::state::AppState::test_new();
+        // No workspaces — should return None safely.
+        assert!(state.twin_pane_for_tab(0, 0).is_none());
+    }
+
+    #[test]
+    fn twin_pane_for_tab_returns_none_when_token_absent() {
+        let mut state = crate::app::state::AppState::test_new();
+        state.workspaces = vec![Workspace::test_new("main")];
+        state.ensure_test_terminals();
+        // No metadata token patched — should return None.
+        assert!(state.twin_pane_for_tab(0, 0).is_none());
+    }
+
+    #[test]
+    fn twin_pane_for_tab_returns_none_without_session_token() {
+        let mut state = crate::app::state::AppState::test_new();
+        state.workspaces = vec![Workspace::test_new("main")];
+        state.ensure_test_terminals();
+        // twin=1 but no twin_session — not eligible.
+        let terminal_id = state.workspaces[0].tabs[0]
+            .panes
+            .values()
+            .next()
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        let mut patch = std::collections::HashMap::new();
+        patch.insert("twin".into(), Some("1".into()));
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .metadata_tokens
+            .patch(patch, None, std::time::Instant::now());
+        assert!(state.twin_pane_for_tab(0, 0).is_none());
+    }
+
+    #[test]
+    fn twin_pane_for_tab_original_captures_session_id() {
+        let state = state_with_twin_token(false);
+        let info = state.twin_pane_for_tab(0, 0).expect("should be eligible");
+        assert!(
+            !info.is_clone,
+            "original pane should not be marked as clone"
+        );
+        assert_eq!(info.session_id, TEST_SESSION_ID);
+        assert!(
+            info.public_pane_id.contains(':'),
+            "public pane id should be formatted as workspace:pane"
+        );
+    }
+
+    #[test]
+    fn twin_pane_for_tab_clone_pane_is_marked_as_clone_and_captures_session() {
+        let state = state_with_twin_token(true);
+        let info = state.twin_pane_for_tab(0, 0).expect("should be eligible");
+        assert!(info.is_clone, "clone pane should be marked as clone");
+        assert_eq!(info.session_id, TEST_SESSION_ID);
+    }
+
+    #[test]
+    fn twin_pane_for_tab_returns_none_for_multi_pane_tab() {
+        let mut state = state_with_twin_token(false);
+        // Split the tab to create a second pane.
+        state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        state.ensure_test_terminals();
+        // Patch the new panes' terminals too.
+        let now = std::time::Instant::now();
+        let terminal_ids: Vec<_> = state.workspaces[0].tabs[0]
+            .panes
+            .values()
+            .map(|p| p.attached_terminal_id.clone())
+            .collect();
+        for tid in &terminal_ids {
+            if let Some(t) = state.terminals.get_mut(tid) {
+                let mut patch = std::collections::HashMap::new();
+                patch.insert("twin".into(), Some("1".into()));
+                patch.insert("twin_session".into(), Some(TEST_SESSION_ID.into()));
+                t.metadata_tokens.patch(patch, None, now);
+            }
+        }
+        // Multi-pane tab must return None to avoid agent ambiguity.
+        assert!(
+            state.twin_pane_for_tab(0, 0).is_none(),
+            "multi-pane tab must not produce an eligibility result"
+        );
     }
 }

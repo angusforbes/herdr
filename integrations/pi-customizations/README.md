@@ -67,6 +67,30 @@ Installing files does not launch/reload agents or change a running server.
 Before updating a real installation, back up its files and obtain approval.
 Only reload the specific Pi sessions whose owners approved the update.
 
+## Optional Pi Twin package
+
+The native tab menu supports **Agent Split** and **Agent Merge** for eligible Pi
+panes. This requires the separate [pi-twin package](https://github.com/angusforbes/pi-twin)
+and its `pi-twin` CLI on the server's PATH; the seven-file setup above does not
+install that package. The integration was checked against package commit
+`c011fa37b63b6aaee309d10e4f4d650fd2ebb869` with Pi 0.85.1.
+
+Load the package in the relevant Pi sessions at an approved idle boundary. Its
+capability/session metadata controls menu availability; stale targets are
+rejected. `/twin-split` and `/twin-merge` remain available through Pi independently
+of the native menu. Errors and timeouts do not authorize automatic retries.
+
+Twin names such as `Parent[a]` require helpers that preserve the closing bracket.
+The bundled `herdr-name` does so; an independently installed name-keeper must
+also be updated deliberately. Existing differing helper files are still refused
+by setup rather than silently overwritten.
+
+Twins share files: splitting does not create a Git worktree, rewind disk state,
+or isolate edits. Reviewed merge-back imports conversation context, not files.
+Do not apply the package's standalone Herdr menu patch again on a build already
+containing this integration. Installing or reloading Pi Twin is not permission
+to restart the shared Herdr server.
+
 ## Validation status
 
 `python3 test_setup.py`

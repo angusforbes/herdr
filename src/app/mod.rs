@@ -31,6 +31,7 @@ mod tab_bar_status;
 mod terminal_targets;
 mod terminal_titles;
 mod theme_sync;
+mod twin;
 mod window_title;
 mod worktrees;
 
@@ -567,6 +568,7 @@ impl App {
             request_submit_worktree_create: false,
             request_submit_worktree_open: false,
             request_submit_worktree_remove: false,
+            pending_twin_action: None,
             request_reload_config: false,
             request_client_config_reload: false,
             request_clipboard_write: None,
@@ -1050,6 +1052,11 @@ impl App {
 
             if let Some(ws_idx) = self.state.request_remove_linked_worktree.take() {
                 self.open_remove_linked_worktree_confirmation(ws_idx);
+                needs_render = true;
+            }
+
+            if let Some(action) = self.state.pending_twin_action.take() {
+                self.spawn_twin_command(action);
                 needs_render = true;
             }
 

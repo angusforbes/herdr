@@ -1197,6 +1197,37 @@ pub(crate) struct TabPressState {
     pub start_row: u16,
 }
 
+/// Live-clone pane info captured when the tab context menu is opened.
+/// Derived from pane metadata tokens set by the pi-twin extension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TwinPaneInfo {
+    pub pane_id: PaneId,
+    /// Public pane identifier (e.g. `w1:p3`) passed directly to the pi-twin CLI.
+    pub public_pane_id: String,
+    /// Session identity token from `twin_session` metadata, captured at menu-open
+    /// time and re-checked before dispatch to detect pane reuse by a different session.
+    pub session_id: String,
+    /// `true` when the pane carries `twin_parent=1` (this pane is itself a clone).
+    pub is_clone: bool,
+}
+
+/// Deferred pi-twin CLI action queued by the context-menu handler and
+/// dispatched by the App event loop, which has access to `event_tx` for
+/// background process results.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TwinAction {
+    Clone {
+        public_pane_id: String,
+        /// Session token captured at menu-open; revalidated before dispatch.
+        session_id: String,
+    },
+    Merge {
+        public_pane_id: String,
+        /// Session token captured at menu-open; revalidated before dispatch.
+        session_id: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextMenuKind {
     Workspace {
@@ -1211,6 +1242,9 @@ pub enum ContextMenuKind {
     Tab {
         ws_idx: usize,
         tab_idx: usize,
+        /// Live-clone eligibility captured at menu-open time for single-pane tabs.
+        /// `None` for multi-pane tabs or panes without the `twin=1` token.
+        twin_pane: Option<TwinPaneInfo>,
     },
     Pane {
         ws_idx: usize,
@@ -1255,7 +1289,18 @@ impl ContextMenuState {
                 "Open worktree...",
                 if collapsed { "Expand" } else { "Collapse" },
             ],
-            ContextMenuKind::Tab { .. } => vec!["New tab", "Rename", "Close"],
+            ContextMenuKind::Tab { ref twin_pane, .. } => {
+                let mut items = vec!["New tab", "Rename", "Close"];
+                // "Agent Split" is available for any eligible session (original or clone).
+                // "Agent Merge" is only available for clone sessions.
+                if twin_pane.is_some() {
+                    items.push("Agent Split");
+                }
+                if twin_pane.as_ref().is_some_and(|info| info.is_clone) {
+                    items.push("Agent Merge");
+                }
+                items
+            }
             ContextMenuKind::Pane {
                 source_pane_id,
                 has_manual_label,
@@ -1406,6 +1451,8 @@ pub struct AppState {
     pub request_submit_worktree_create: bool,
     pub request_submit_worktree_open: bool,
     pub request_submit_worktree_remove: bool,
+    /// Deferred pi-twin CLI action; dispatched by the App event loop.
+    pub pending_twin_action: Option<TwinAction>,
     pub request_reload_config: bool,
     /// Set when the headless server should ask attached clients to reload
     /// their client-local sound config from disk.
@@ -1859,6 +1906,7 @@ impl AppState {
             request_submit_worktree_create: false,
             request_submit_worktree_open: false,
             request_submit_worktree_remove: false,
+            pending_twin_action: None,
             request_reload_config: false,
             request_client_config_reload: false,
             request_clipboard_write: None,
@@ -2323,9 +2371,9 @@ impl AppState {
                 | ContextMenuKind::GitWorkspace { ws_idx, .. } => {
                     assert_workspace_index(ws_idx, "context menu workspace")
                 }
-                ContextMenuKind::Tab { ws_idx, tab_idx } => {
-                    assert_tab_index(ws_idx, tab_idx, "context menu tab")
-                }
+                ContextMenuKind::Tab {
+                    ws_idx, tab_idx, ..
+                } => assert_tab_index(ws_idx, tab_idx, "context menu tab"),
                 ContextMenuKind::Pane {
                     ws_idx,
                     tab_idx,

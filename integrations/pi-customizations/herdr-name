@@ -73,7 +73,7 @@ p=json.load(sys.stdin)["result"]["pane"]; print(p.get("tab_id",""))' 2>/dev/null
   if [[ -n "$tab_info" ]]; then
     count="$(herdr tab get "$tab_info" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["tab"].get("pane_count",1))' 2>/dev/null || echo 1)"
     if [[ "$count" == "1" ]]; then
-      bare="$(sed -E 's/\{#[0-9a-fA-F]{6}\}//g; s/^[^A-Za-z0-9]*//; s/[^A-Za-z0-9]*$//' <<<"$name")"
+      bare="$(sed -E 's/\{#[0-9a-fA-F]{6}\}//g; s/^[^A-Za-z0-9]*//; s/[[:space:]]*$//' <<<"$name")"
       [[ -n "$bare" ]] && herdr tab rename "$tab_info" "$bare" >/dev/null 2>&1 || true
     fi
   fi

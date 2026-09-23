@@ -180,4 +180,11 @@ pub enum AppEvent {
         generation: u64,
         result: Result<String, String>,
     },
+    /// A background pi-twin CLI command (clone or merge-back) finished.
+    TwinCommandFinished {
+        /// Short label for error messages ("Agent Split" or "Agent Merge").
+        action: String,
+        /// `Ok(())` on exit code 0; `Err(message)` on spawn failure or non-zero exit.
+        result: Result<(), String>,
+    },
 }

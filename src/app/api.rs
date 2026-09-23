@@ -219,6 +219,17 @@ impl App {
             return Vec::new();
         }
 
+        if let AppEvent::TwinCommandFinished { action, result } = ev {
+            if let Err(message) = result {
+                self.state.config_diagnostic = Some(format!("{action} failed: {message}"));
+                self.config_diagnostic_deadline =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+                self.render_dirty.request_generic();
+                self.render_notify.notify_one();
+            }
+            return Vec::new();
+        }
+
         if let AppEvent::PaneDied { pane_id } = &ev {
             if self
                 .state

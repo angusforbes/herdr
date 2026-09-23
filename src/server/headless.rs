@@ -992,6 +992,11 @@ impl HeadlessServer {
             crate::render_prof::event("full_render_cause.deferred_worktree_dialog");
         }
 
+        if let Some(action) = self.app.state.pending_twin_action.take() {
+            self.app.spawn_twin_command(action);
+            needs_render = true;
+        }
+
         if self.app.state.request_submit_worktree_create {
             self.app.state.request_submit_worktree_create = false;
             self.app.submit_worktree_create_via_api();
@@ -5612,6 +5617,23 @@ mod tests {
             Some(expected_version.as_str())
         );
         assert!(server.app.event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn headless_deferred_twin_is_dispatched_and_stale_target_rejected() {
+        let mut server = test_headless_server();
+        server.app.state.pending_twin_action = Some(crate::app::state::TwinAction::Clone {
+            public_pane_id: "w999:p999".to_string(),
+            session_id: "old-session".to_string(),
+        });
+        assert!(server.handle_deferred_requests_headless());
+        assert!(server.app.state.pending_twin_action.is_none());
+        assert!(server
+            .app
+            .state
+            .config_diagnostic
+            .as_deref()
+            .is_some_and(|s| s.contains("session has changed")));
     }
 
     #[tokio::test]

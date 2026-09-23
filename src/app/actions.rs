@@ -2991,6 +2991,7 @@ impl AppState {
             AppEvent::PluginCommandFinished { .. } => Vec::new(),
             AppEvent::SearchPaneAiFinished { .. } => Vec::new(),
             AppEvent::ConversationLaunchRetry { .. } => Vec::new(),
+            AppEvent::TwinCommandFinished { .. } => Vec::new(),
         }
     }
 

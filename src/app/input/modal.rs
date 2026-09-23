@@ -7,6 +7,7 @@ use crate::{
     app::{
         state::{
             AppState, ContextMenuKind, ContextMenuState, MenuListState, Mode, NavigatorStateFilter,
+            TwinAction,
         },
         App,
     },
@@ -819,19 +820,34 @@ pub(super) fn apply_context_menu_action(
                 state.mode = Mode::Navigate;
             }
         }
-        (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("New tab")) => {
+        (
+            ContextMenuKind::Tab {
+                ws_idx, tab_idx, ..
+            },
+            Some("New tab"),
+        ) => {
             state.selected = ws_idx;
             state.active = Some(ws_idx);
             state.switch_tab(tab_idx);
             open_new_tab_dialog(state);
         }
-        (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("Rename")) => {
+        (
+            ContextMenuKind::Tab {
+                ws_idx, tab_idx, ..
+            },
+            Some("Rename"),
+        ) => {
             state.selected = ws_idx;
             state.active = Some(ws_idx);
             state.switch_tab(tab_idx);
             open_rename_active_tab(state, false);
         }
-        (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("Close")) => {
+        (
+            ContextMenuKind::Tab {
+                ws_idx, tab_idx, ..
+            },
+            Some("Close"),
+        ) => {
             state.selected = ws_idx;
             state.active = Some(ws_idx);
             state.switch_tab(tab_idx);
@@ -842,6 +858,32 @@ pub(super) fn apply_context_menu_action(
                     Mode::Navigate
                 };
             }
+        }
+        (
+            ContextMenuKind::Tab {
+                twin_pane: Some(ref info),
+                ..
+            },
+            Some("Agent Split"),
+        ) => {
+            state.pending_twin_action = Some(TwinAction::Clone {
+                public_pane_id: info.public_pane_id.clone(),
+                session_id: info.session_id.clone(),
+            });
+            leave_modal(state);
+        }
+        (
+            ContextMenuKind::Tab {
+                twin_pane: Some(ref info),
+                ..
+            },
+            Some("Agent Merge"),
+        ) => {
+            state.pending_twin_action = Some(TwinAction::Merge {
+                public_pane_id: info.public_pane_id.clone(),
+                session_id: info.session_id.clone(),
+            });
+            leave_modal(state);
         }
         (ContextMenuKind::Pane { pane_id, .. }, Some("Rename pane")) => {
             open_rename_pane(state, pane_id);
@@ -1249,22 +1291,64 @@ impl App {
                     self.state.mode = Mode::Navigate;
                 }
             }
-            (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("New tab")) => {
+            (
+                ContextMenuKind::Tab {
+                    ws_idx, tab_idx, ..
+                },
+                Some("New tab"),
+            ) => {
                 self.focus_workspace_idx_via_api(ws_idx);
                 self.focus_tab_idx_via_api(tab_idx);
                 open_new_tab_dialog(&mut self.state);
             }
-            (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("Rename")) => {
+            (
+                ContextMenuKind::Tab {
+                    ws_idx, tab_idx, ..
+                },
+                Some("Rename"),
+            ) => {
                 self.focus_workspace_idx_via_api(ws_idx);
                 self.focus_tab_idx_via_api(tab_idx);
                 open_rename_active_tab(&mut self.state, false);
             }
-            (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("Close")) => {
+            (
+                ContextMenuKind::Tab {
+                    ws_idx, tab_idx, ..
+                },
+                Some("Close"),
+            ) => {
                 self.focus_workspace_idx_via_api(ws_idx);
                 self.focus_tab_idx_via_api(tab_idx);
                 if !self.close_active_tab_via_api_requires_confirmation() {
                     leave_modal(&mut self.state);
                 }
+            }
+            (
+                ContextMenuKind::Tab {
+                    twin_pane: Some(ref info),
+                    ..
+                },
+                Some("Agent Split"),
+            ) => {
+                self.state.pending_twin_action = Some(TwinAction::Clone {
+                    public_pane_id: info.public_pane_id.clone(),
+                    session_id: info.session_id.clone(),
+                });
+                leave_modal(&mut self.state);
+            }
+            (
+                ContextMenuKind::Tab {
+                    twin_pane: Some(ref info),
+                    ..
+                },
+                Some("Agent Merge"),
+            ) => {
+                // Dispatch revalidates identity before focusing the target pane.
+                self.state.pending_twin_action = Some(TwinAction::Merge {
+                    public_pane_id: info.public_pane_id.clone(),
+                    session_id: info.session_id.clone(),
+                });
+                leave_modal(&mut self.state);
             }
             (ContextMenuKind::Pane { pane_id, .. }, Some("Rename pane")) => {
                 open_rename_pane(&mut self.state, pane_id);
@@ -2316,6 +2400,7 @@ mod tests {
             kind: ContextMenuKind::Tab {
                 ws_idx: 0,
                 tab_idx: 0,
+                twin_pane: None,
             },
             x: 0,
             y: 0,
@@ -2370,5 +2455,130 @@ mod tests {
         assert_eq!(app.state.mode, Mode::ConfirmClose);
         assert_eq!(app.state.workspaces.len(), 2);
         assert!(app.state.context_menu.is_none());
+    }
+
+    // ── Live-clone context menu tests ────────────────────────────────────────
+
+    fn tab_menu(twin_pane: Option<crate::app::state::TwinPaneInfo>) -> ContextMenuState {
+        ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                ws_idx: 0,
+                tab_idx: 0,
+                twin_pane,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        }
+    }
+
+    const TEST_SESSION: &str = "test-session-uuid-5678";
+
+    fn stub_pane_info(is_clone: bool) -> crate::app::state::TwinPaneInfo {
+        crate::app::state::TwinPaneInfo {
+            pane_id: crate::layout::PaneId::alloc(),
+            public_pane_id: "w1:p3".to_string(),
+            session_id: TEST_SESSION.to_string(),
+            is_clone,
+        }
+    }
+
+    #[test]
+    fn tab_menu_items_without_twin_are_new_rename_close() {
+        let menu = tab_menu(None);
+        assert_eq!(menu.items(), vec!["New tab", "Rename", "Close"]);
+    }
+
+    #[test]
+    fn tab_menu_items_for_original_include_clone_agent_only() {
+        let menu = tab_menu(Some(stub_pane_info(false)));
+        assert_eq!(
+            menu.items(),
+            vec!["New tab", "Rename", "Close", "Agent Split"]
+        );
+    }
+
+    #[test]
+    fn tab_menu_items_for_clone_include_both_actions() {
+        // Clone-of-clone: user can spawn another clone OR merge back to parent.
+        let menu = tab_menu(Some(stub_pane_info(true)));
+        assert_eq!(
+            menu.items(),
+            vec!["New tab", "Rename", "Close", "Agent Split", "Agent Merge"]
+        );
+    }
+
+    #[test]
+    fn clone_agent_action_sets_pending_action_with_session_id() {
+        let info = stub_pane_info(false);
+        let public_id = info.public_pane_id.clone();
+        let mut state = crate::app::state::AppState::test_new();
+        state.workspaces = vec![crate::workspace::Workspace::test_new("ws")];
+        state.active = Some(0);
+        state.mode = Mode::ContextMenu;
+        let mut runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let menu = tab_menu(Some(info));
+        let idx = menu
+            .items()
+            .iter()
+            .position(|i| *i == "Agent Split")
+            .unwrap();
+        apply_context_menu_action(&mut state, &mut runtimes, menu, idx);
+        assert_eq!(
+            state.pending_twin_action,
+            Some(crate::app::state::TwinAction::Clone {
+                public_pane_id: public_id,
+                session_id: TEST_SESSION.to_string(),
+            })
+        );
+        assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn merge_back_action_sets_pending_action_with_session_id() {
+        let info = stub_pane_info(true);
+        let public_id = info.public_pane_id.clone();
+        let mut state = crate::app::state::AppState::test_new();
+        state.workspaces = vec![crate::workspace::Workspace::test_new("ws")];
+        state.active = Some(0);
+        state.mode = Mode::ContextMenu;
+        let mut runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let menu = tab_menu(Some(info));
+        let idx = menu
+            .items()
+            .iter()
+            .position(|i| *i == "Agent Merge")
+            .unwrap();
+        apply_context_menu_action(&mut state, &mut runtimes, menu, idx);
+        assert_eq!(
+            state.pending_twin_action,
+            Some(crate::app::state::TwinAction::Merge {
+                public_pane_id: public_id,
+                session_id: TEST_SESSION.to_string(),
+            })
+        );
+        assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn api_clone_agent_action_sets_pending_action_with_session_id() {
+        let info = stub_pane_info(false);
+        let public_id = info.public_pane_id.clone();
+        let mut app = app_with_test_workspaces(&["main"]);
+        app.state.mode = Mode::ContextMenu;
+        let menu = tab_menu(Some(info));
+        let idx = menu
+            .items()
+            .iter()
+            .position(|i| *i == "Agent Split")
+            .unwrap();
+        app.apply_context_menu_action_via_api(menu, idx);
+        assert_eq!(
+            app.state.pending_twin_action,
+            Some(crate::app::state::TwinAction::Clone {
+                public_pane_id: public_id,
+                session_id: TEST_SESSION.to_string(),
+            })
+        );
     }
 }

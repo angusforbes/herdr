@@ -1,4 +1,7 @@
 import importlib.util
+import json
+import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -63,6 +66,33 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'symlink'):
             setup.install(self.pi, self.bin, True)
         self.assertFalse(self.bin.exists())
+
+    def test_naming_helper_preserves_twin_suffix(self):
+        setup.install(self.pi, self.bin, True)
+        fake = self.bin / 'herdr'
+        log = self.root / 'calls.jsonl'
+        fake.write_text('''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ['TEST_CALLS'], 'a') as log:
+    log.write(json.dumps(args) + '\\n')
+if args[:2] == ['pane', 'get']:
+    print(json.dumps({'result': {'pane': {'tab_id': 'w1:t1'}}}))
+elif args[:2] == ['tab', 'get']:
+    print(json.dumps({'result': {'tab': {'pane_count': 1}}}))
+''')
+        fake.chmod(0o700)
+        env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ.get('PATH', ''),
+                   HOME=str(self.root), XDG_STATE_HOME=str(self.root / 'state'),
+                   HERDR_PANE_ID='w1:p1', TEST_CALLS=str(log))
+        env.pop('HERDR_NAME_NO_TAB', None)
+        for name in ('Torque[a]', '🔧 Torque[a] ', '{#00ff00}Torque[a]'):
+            with self.subTest(name=name):
+                log.write_text('')
+                subprocess.run(['bash', str(self.bin / 'herdr-name'), name],
+                               env=env, check=True, capture_output=True, text=True)
+                calls = [json.loads(line) for line in log.read_text().splitlines()]
+                self.assertIn(['tab', 'rename', 'w1:t1', 'Torque[a]'], calls)
 
     def test_non_directory_parent_refused(self):
         self.bin.write_text('keep')
